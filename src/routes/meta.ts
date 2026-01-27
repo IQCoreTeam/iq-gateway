@@ -5,7 +5,6 @@ import { metaCache, TTL, getDiskCache, setDiskCache } from "../cache";
 export const metaRouter = new Hono();
 
 const FETCH_TIMEOUT = 30_000; // 30s for metadata
-const DEFAULT_CREATOR = process.env.DEFAULT_CREATOR || "";
 
 interface RawMeta {
   filename?: string;
@@ -75,7 +74,6 @@ metaRouter.get("/:sig", async (c) => {
     properties: {
       files: [{ uri: `${baseUrl}/img/${sig}.png`, type: raw.filetype || "image/png" }],
       category: "image",
-      ...(DEFAULT_CREATOR && { creators: [{ address: DEFAULT_CREATOR, share: 100 }] }),
     },
   };
 

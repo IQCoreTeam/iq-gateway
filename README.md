@@ -127,7 +127,6 @@ curl http://localhost:3000/img/YOUR_TX_SIG.png
 SOLANA_RPC_ENDPOINT=https://api.devnet.solana.com
 PORT=3000
 BASE_PATH=          # Set if behind reverse proxy (e.g., /iq)
-DEFAULT_CREATOR=    # Your wallet address for NFT metadata
 
 # Run
 bun run src/server.ts
