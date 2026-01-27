@@ -7,7 +7,7 @@ import { homedir } from "os";
 import { join } from "path";
 
 const RPC = process.env.SOLANA_RPC_ENDPOINT || "https://api.devnet.solana.com";
-const GATEWAY_URL = process.env.GATEWAY_URL || "https://pi.nubs.site/iq";
+const GATEWAY_URL = process.env.GATEWAY_URL || "http://localhost:3000";
 const ASSET_SIG = process.env.ASSET_SIG || "52WXtc2TvQbYU3hsTVYLxqSYVCtK6sd3bHUfKZL5LXqR5vfKhCqbSeQpRmzciUpbmgqUxuphvJmX4zWp2a5oJdPp";
 
 async function main() {

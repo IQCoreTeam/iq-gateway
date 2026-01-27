@@ -88,7 +88,7 @@ Save the **TX signature** it outputs!
 
 ### 3. Mint a token
 ```bash
-GATEWAY_URL="https://pi.nubs.site/iq" \
+GATEWAY_URL="http://localhost:3000" \
 ASSET_SIG="YOUR_TX_SIG" \
 bun run scripts/mint-token.ts
 ```
@@ -100,18 +100,18 @@ bun run scripts/mint-token.ts
 
 ## Live Gateway
 
-**https://pi.nubs.site/iq/**
+**http://localhost:3000/**
 
 Try it:
 ```bash
 # Health check
-curl https://pi.nubs.site/iq/health
+curl http://localhost:3000/health
 
 # Get metadata (even for a tx sig the gateway has never seen!)
-curl https://pi.nubs.site/iq/meta/YOUR_TX_SIG.json
+curl http://localhost:3000/meta/YOUR_TX_SIG.json
 
 # Get image
-curl https://pi.nubs.site/iq/img/YOUR_TX_SIG.png
+curl http://localhost:3000/img/YOUR_TX_SIG.png
 ```
 
 ## Endpoints
