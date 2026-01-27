@@ -6,7 +6,7 @@ import { readFileSync } from "fs";
 
 const RPC = process.env.SOLANA_RPC_ENDPOINT || "https://api.devnet.solana.com";
 const GATEWAY_URL = process.env.GATEWAY_URL || "https://pi.nubs.site/iq";
-const ASSET_SIG = "52WXtc2TvQbYU3hsTVYLxqSYVCtK6sd3bHUfKZL5LXqR5vfKhCqbSeQpRmzciUpbmgqUxuphvJmX4zWp2a5oJdPp";
+const ASSET_SIG = process.env.ASSET_SIG || "52WXtc2TvQbYU3hsTVYLxqSYVCtK6sd3bHUfKZL5LXqR5vfKhCqbSeQpRmzciUpbmgqUxuphvJmX4zWp2a5oJdPp";
 
 async function main() {
   console.log("Creating NFT on devnet...\n");
