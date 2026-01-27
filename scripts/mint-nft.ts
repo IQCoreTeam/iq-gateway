@@ -5,7 +5,7 @@ import { generateSigner, keypairIdentity, percentAmount } from "@metaplex-founda
 import { readFileSync } from "fs";
 
 const RPC = process.env.SOLANA_RPC_ENDPOINT || "https://api.devnet.solana.com";
-const GATEWAY_URL = process.env.GATEWAY_URL || "http://localhost:3000";
+const GATEWAY_URL = process.env.GATEWAY_URL || "https://pi.nubs.site/iq";
 const ASSET_SIG = process.env.ASSET_SIG || "52WXtc2TvQbYU3hsTVYLxqSYVCtK6sd3bHUfKZL5LXqR5vfKhCqbSeQpRmzciUpbmgqUxuphvJmX4zWp2a5oJdPp";
 
 async function main() {
@@ -13,7 +13,7 @@ async function main() {
 
   const umi = createUmi(RPC).use(mplTokenMetadata());
 
-  const keypairPath = process.env.KEYPAIR_PATH || "" + require("os").homedir() + "/.config/solana/id.json";
+  const keypairPath = process.env.KEYPAIR_PATH || "/home/linbox/.config/solana/id.json";
   const secretKey = JSON.parse(readFileSync(keypairPath, "utf8"));
   const keypair = umi.eddsa.createKeypairFromSecretKey(new Uint8Array(secretKey));
   umi.use(keypairIdentity(keypair));
