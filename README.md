@@ -64,8 +64,8 @@ After first load, everything is cached and serves instantly (~5ms).
 ### 1. Setup
 ```bash
 # Clone both repos
-git clone git@github.com:NubsCarson/iq-gateway.git
-git clone git@github.com:IQCoreTeam/iqlabs-solana-sdk.git iqlabs-sdk
+git clone https://github.com/IQCoreTeam/iq-gateway.git
+git clone https://github.com/IQCoreTeam/iqlabs-solana-sdk.git iqlabs-sdk
 
 # Install SDK
 cd iqlabs-sdk && bun install && cd ..

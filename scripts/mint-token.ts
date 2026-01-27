@@ -16,7 +16,7 @@ async function main() {
   const umi = createUmi(RPC).use(mplTokenMetadata());
 
   // Load keypair from default Solana CLI path
-  const keypairPath = process.env.KEYPAIR_PATH || "/home/linbox/.config/solana/id.json";
+  const keypairPath = process.env.KEYPAIR_PATH || join(homedir(), ".config/solana/id.json");
   if (!existsSync(keypairPath)) {
     console.error("No keypair found at:", keypairPath);
     console.error("Run: solana-keygen new");

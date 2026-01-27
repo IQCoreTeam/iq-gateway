@@ -8,7 +8,7 @@ const { writer } = iqlabs;
 const RPC = process.env.SOLANA_RPC_ENDPOINT || "https://api.devnet.solana.com";
 
 async function main() {
-  const keypairPath = process.env.KEYPAIR_PATH || "/home/linbox/.config/solana/id.json";
+  const keypairPath = process.env.KEYPAIR_PATH || "" + require("os").homedir() + "/.config/solana/id.json";
   const secretKey = JSON.parse(readFileSync(keypairPath, "utf8"));
   const keypair = Keypair.fromSecretKey(new Uint8Array(secretKey));
   const connection = new Connection(RPC, "confirmed");
@@ -38,7 +38,7 @@ async function main() {
   console.log("\nDone!");
   console.log("TX Signature:", result);
   console.log("\nTest with:");
-  console.log(`curl https://pi.nubs.site/iq/meta/${result}.json`);
+  console.log(`curl http://localhost:3000/meta/${result}.json`);
 }
 
 main().catch(console.error);

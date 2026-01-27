@@ -13,7 +13,7 @@ async function main() {
 
   const umi = createUmi(RPC).use(mplTokenMetadata());
 
-  const keypairPath = process.env.KEYPAIR_PATH || "/home/linbox/.config/solana/id.json";
+  const keypairPath = process.env.KEYPAIR_PATH || "" + require("os").homedir() + "/.config/solana/id.json";
   const secretKey = JSON.parse(readFileSync(keypairPath, "utf8"));
   const keypair = umi.eddsa.createKeypairFromSecretKey(new Uint8Array(secretKey));
   umi.use(keypairIdentity(keypair));

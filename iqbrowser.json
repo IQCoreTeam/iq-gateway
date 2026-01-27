@@ -1,0 +1,9 @@
+{
+  "name": "iq-gateway",
+  "version": "1.0.0",
+  "description": "Serves on-chain stored assets via HTTP for Metaplex NFT/Token compatibility",
+  "root": "iq-gateway",
+  "runtime": "bun",
+  "install": "bun install",
+  "start": "bun run src/server.ts"
+}
