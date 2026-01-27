@@ -1,0 +1,8 @@
+node_modules/
+dist/
+cache/
+.env
+bun.lockb
+*.log
+test-keypair.json
+.DS_Store
