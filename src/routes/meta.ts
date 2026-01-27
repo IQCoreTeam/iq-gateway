@@ -41,16 +41,13 @@ metaRouter.get("/:sig", async (c) => {
   // Build URLs dynamically (not cached)
   const proto = c.req.header("X-Forwarded-Proto") || "http";
   const host = c.req.header("Host") || "localhost:3000";
-  const baseUrl = `${proto}://${host}`;
-
-  // Build name from filename (remove extension)
-  const filename = raw.filename || "IQ Asset";
-  const name = raw.symbol ? `${raw.symbol} - ${filename.replace(/\.[^.]+$/, "")}` : filename.replace(/\.[^.]+$/, "");
+  const basePath = process.env.BASE_PATH || "";
+  const baseUrl = `${proto}://${host}${basePath}`;
 
   const metaplex = {
-    name: name || "IQ Asset",
-    symbol: raw.symbol || "IQ",
-    description: raw.description || "On-chain stored asset served via IQ Gateway",
+    name: raw.symbol || "IQTEST",
+    symbol: raw.symbol || "IQTEST",
+    description: raw.description || "on chain data storage",
     image: `${baseUrl}/img/${sig}.png`,
     external_url: `${baseUrl}/asset/${sig}`,
     attributes: raw.attributes || [
