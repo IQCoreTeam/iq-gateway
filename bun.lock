@@ -13,7 +13,7 @@
         "@solana/web3.js": "^1.98.0",
         "dotenv": "^17.2.3",
         "hono": "^4.6.0",
-        "iqlabs-sdk": "file:../../iqlabs-sdk",
+        "iqlabs-sdk": "file:../iqlabs-sdk",
       },
       "devDependencies": {
         "@types/bun": "latest",
@@ -226,7 +226,7 @@
 
     "ieee754": ["ieee754@1.2.1", "", {}, "sha512-dcyqhDvX1C46lXZcVqCpK+FtMRQVdIMN6/Df5js2zouUsqG7I6sFxitIC+7KYK29KdXOLHdu9zL4sFnoVQnqaA=="],
 
-    "iqlabs-sdk": ["iqlabs-solana-sdk@file:../../iqlabs-sdk", { "dependencies": { "@coral-xyz/anchor": "^0.32.1", "@noble/hashes": "^1.8.0", "@solana/web3.js": "^1.98.0" }, "devDependencies": { "@types/node": "^25.0.3", "tsx": "^4.19.2", "typescript": "^5.7.3" } }],
+    "iqlabs-sdk": ["iqlabs-sdk@file:../iqlabs-sdk", { "dependencies": { "@coral-xyz/anchor": "^0.32.1", "@noble/hashes": "^1.8.0", "@solana/web3.js": "^1.98.0" }, "devDependencies": { "@types/node": "^25.0.3", "tsx": "^4.19.2", "typescript": "^5.7.3" } }],
 
     "isomorphic-ws": ["isomorphic-ws@4.0.1", "", { "peerDependencies": { "ws": "*" } }, "sha512-BhBvN2MBpWTaSHdWRb/bwdZJ1WaehQ2L1KngkCkfLUGF0mAWAT1sQUQacEmQ0jXkFw/czDXPNQSL5u2/Krsz1w=="],
 

@@ -4,8 +4,6 @@ import { metaCache, TTL, getDiskCache, setDiskCache } from "../cache";
 
 export const metaRouter = new Hono();
 
-const FETCH_TIMEOUT = 30_000; // 30s for metadata
-
 interface RawMeta {
   filename?: string;
   symbol?: string;

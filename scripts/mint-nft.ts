@@ -2,18 +2,30 @@ import "dotenv/config";
 import { createUmi } from "@metaplex-foundation/umi-bundle-defaults";
 import { createNft, mplTokenMetadata } from "@metaplex-foundation/mpl-token-metadata";
 import { generateSigner, keypairIdentity, percentAmount } from "@metaplex-foundation/umi";
-import { readFileSync } from "fs";
+import { readFileSync, existsSync } from "fs";
+import { homedir } from "os";
 
-const RPC = process.env.SOLANA_RPC_ENDPOINT || "https://api.devnet.solana.com";
-const GATEWAY_URL = process.env.GATEWAY_URL || "https://pi.nubs.site/iq";
-const ASSET_SIG = process.env.ASSET_SIG || "52WXtc2TvQbYU3hsTVYLxqSYVCtK6sd3bHUfKZL5LXqR5vfKhCqbSeQpRmzciUpbmgqUxuphvJmX4zWp2a5oJdPp";
+const RPC = process.env.SOLANA_RPC_ENDPOINT;
+const GATEWAY_URL = process.env.GATEWAY_URL;
+const ASSET_SIG = process.env.ASSET_SIG;
+
+if (!RPC) {
+  console.error("SOLANA_RPC_ENDPOINT required");
+  process.exit(1);
+}
+if (!GATEWAY_URL) {
+  console.error("GATEWAY_URL required (e.g. https://pi.nubs.site/iq)");
+  process.exit(1);
+}
+if (!ASSET_SIG) {
+  console.error("ASSET_SIG required - run upload-test.ts first");
+  process.exit(1);
+}
 
 async function main() {
-  console.log("Creating NFT on devnet...\n");
-
   const umi = createUmi(RPC).use(mplTokenMetadata());
 
-  const keypairPath = process.env.KEYPAIR_PATH || "/home/linbox/.config/solana/id.json";
+  const keypairPath = process.env.KEYPAIR_PATH || `${homedir()}/.config/solana/id.json`;
   const secretKey = JSON.parse(readFileSync(keypairPath, "utf8"));
   const keypair = umi.eddsa.createKeypairFromSecretKey(new Uint8Array(secretKey));
   umi.use(keypairIdentity(keypair));

@@ -3,15 +3,29 @@ import { createUmi } from "@metaplex-foundation/umi-bundle-defaults";
 import { mintV1, mplTokenMetadata } from "@metaplex-foundation/mpl-token-metadata";
 import { keypairIdentity, publicKey } from "@metaplex-foundation/umi";
 import { readFileSync } from "fs";
+import { homedir } from "os";
 
-const RPC = process.env.SOLANA_RPC_ENDPOINT || "https://api.devnet.solana.com";
-const MINT = "2d9sJRPJrgCFrD6qmu2hjitSAhestdYsNDEiPEE8EMuG";
-const AMOUNT = 1_000_000_000n * 1_000_000n; // 1 million tokens (9 decimals)
+const RPC = process.env.SOLANA_RPC_ENDPOINT;
+const MINT = process.env.MINT_ADDRESS;
+const AMOUNT = BigInt(process.env.MINT_AMOUNT || "0");
+
+if (!RPC) {
+  console.error("SOLANA_RPC_ENDPOINT required");
+  process.exit(1);
+}
+if (!MINT) {
+  console.error("MINT_ADDRESS required");
+  process.exit(1);
+}
+if (!AMOUNT || AMOUNT === 0n) {
+  console.error("MINT_AMOUNT required (raw amount with decimals, e.g. 1000000000000000 for 1M tokens with 9 decimals)");
+  process.exit(1);
+}
 
 async function main() {
   const umi = createUmi(RPC).use(mplTokenMetadata());
 
-  const keypairPath = process.env.KEYPAIR_PATH || "" + require("os").homedir() + "/.config/solana/id.json";
+  const keypairPath = process.env.KEYPAIR_PATH || `${homedir()}/.config/solana/id.json`;
   const secretKey = JSON.parse(readFileSync(keypairPath, "utf8"));
   const keypair = umi.eddsa.createKeypairFromSecretKey(new Uint8Array(secretKey));
   umi.use(keypairIdentity(keypair));

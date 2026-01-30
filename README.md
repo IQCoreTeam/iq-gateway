@@ -63,13 +63,9 @@ After first load, everything is cached and serves instantly (~5ms).
 
 ### 1. Setup
 ```bash
-# Clone this repo and the SDK
-# Install SDK
-cd iqlabs-sdk && bun install && cd ..
-
-# Install gateway
 cd iq-gateway && bun install
 cp .env.example .env
+# Edit .env with your RPC endpoint and gateway URL
 ```
 
 Need devnet SOL:
@@ -85,9 +81,7 @@ Save the **TX signature** it outputs!
 
 ### 3. Mint a token
 ```bash
-GATEWAY_URL="http://localhost:3000" \
-ASSET_SIG="YOUR_TX_SIG" \
-bun run scripts/mint-token.ts
+ASSET_SIG="YOUR_TX_SIG" bun run scripts/mint-token.ts
 ```
 
 ### 4. View it

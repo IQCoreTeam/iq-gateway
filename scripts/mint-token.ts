@@ -4,19 +4,28 @@ import { createFungible, mplTokenMetadata } from "@metaplex-foundation/mpl-token
 import { generateSigner, keypairIdentity, percentAmount } from "@metaplex-foundation/umi";
 import { readFileSync, existsSync } from "fs";
 import { homedir } from "os";
-import { join } from "path";
 
-const RPC = process.env.SOLANA_RPC_ENDPOINT || "https://api.devnet.solana.com";
-const GATEWAY_URL = process.env.GATEWAY_URL || "https://pi.nubs.site/iq";
-const ASSET_SIG = process.env.ASSET_SIG || "52WXtc2TvQbYU3hsTVYLxqSYVCtK6sd3bHUfKZL5LXqR5vfKhCqbSeQpRmzciUpbmgqUxuphvJmX4zWp2a5oJdPp";
+const RPC = process.env.SOLANA_RPC_ENDPOINT;
+const GATEWAY_URL = process.env.GATEWAY_URL;
+const ASSET_SIG = process.env.ASSET_SIG;
+
+if (!RPC) {
+  console.error("SOLANA_RPC_ENDPOINT required");
+  process.exit(1);
+}
+if (!GATEWAY_URL) {
+  console.error("GATEWAY_URL required (e.g. https://pi.nubs.site/iq)");
+  process.exit(1);
+}
+if (!ASSET_SIG) {
+  console.error("ASSET_SIG required - run upload-test.ts first");
+  process.exit(1);
+}
 
 async function main() {
-  console.log("Creating token on devnet...\n");
-
   const umi = createUmi(RPC).use(mplTokenMetadata());
 
-  // Load keypair from default Solana CLI path
-  const keypairPath = process.env.KEYPAIR_PATH || "/home/linbox/.config/solana/id.json";
+  const keypairPath = process.env.KEYPAIR_PATH || `${homedir()}/.config/solana/id.json`;
   if (!existsSync(keypairPath)) {
     console.error("No keypair found at:", keypairPath);
     console.error("Run: solana-keygen new");
