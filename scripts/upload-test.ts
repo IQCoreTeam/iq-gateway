@@ -49,7 +49,7 @@ async function main() {
 
   const result = await writer.codeIn(
     { connection, signer: keypair },
-    [fileStr],
+    fileStr,
     undefined,
     fileName,
     0,
