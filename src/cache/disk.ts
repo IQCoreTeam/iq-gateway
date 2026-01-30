@@ -1,8 +1,7 @@
-// Disk cache for persistence across restarts
-
 import { mkdir, readFile, writeFile, unlink, stat } from "node:fs/promises";
 import { join } from "node:path";
 import { createHash } from "node:crypto";
+import { recordEntry, getEntry, removeEntry, touchEntry } from "./store";
 
 const CACHE_DIR = process.env.CACHE_DIR || "./cache";
 
@@ -21,20 +20,14 @@ export async function getDiskCache(
   key: string
 ): Promise<Buffer | null> {
   try {
-    const dir = await ensureCacheDir(type);
-    const ext = type === "meta" ? ".json" : ".bin";
-    const filePath = join(dir, hashKey(key) + ext);
+    const entry = await getEntry(`${type}:${key}`);
+    if (!entry) return null;
 
-    const stats = await stat(filePath);
-    const maxAge = type === "meta" ? 24 * 60 * 60 * 1000 : 7 * 24 * 60 * 60 * 1000;
-
-    if (Date.now() - stats.mtimeMs > maxAge) {
-      await unlink(filePath).catch(() => {});
-      return null;
-    }
-
-    return await readFile(filePath);
+    const data = await readFile(entry.path);
+    return data;
   } catch {
+    // File missing but entry exists - clean up
+    await removeEntry(`${type}:${key}`);
     return null;
   }
 }
@@ -48,7 +41,10 @@ export async function setDiskCache(
     const dir = await ensureCacheDir(type);
     const ext = type === "meta" ? ".json" : ".bin";
     const filePath = join(dir, hashKey(key) + ext);
-    await writeFile(filePath, data);
+    const buf = typeof data === "string" ? Buffer.from(data) : data;
+
+    await writeFile(filePath, buf);
+    await recordEntry(`${type}:${key}`, type, filePath, buf.length);
   } catch (err) {
     console.error("Disk cache write error:", err);
   }
@@ -58,12 +54,5 @@ export async function deleteDiskCache(
   type: "meta" | "img",
   key: string
 ): Promise<void> {
-  try {
-    const dir = await ensureCacheDir(type);
-    const ext = type === "meta" ? ".json" : ".bin";
-    const filePath = join(dir, hashKey(key) + ext);
-    await unlink(filePath);
-  } catch {
-    // Ignore deletion errors
-  }
+  await removeEntry(`${type}:${key}`);
 }
