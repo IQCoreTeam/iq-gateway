@@ -1,6 +1,7 @@
 import { Hono } from "hono";
 import { readAsset, generateETag } from "../chain";
 import { imageCache, TTL, getDiskCache, setDiskCache } from "../cache";
+import { fetchFromPeers } from "../registry";
 
 export const imgRouter = new Hono();
 
@@ -12,9 +13,10 @@ imgRouter.get("/:sig", async (c) => {
   if (sig.endsWith(".jpg")) sig = sig.slice(0, -4);
   if (!sig || sig.length < 80) return c.text("invalid signature", 400);
 
+  const isPeerRequest = c.req.header("X-Peer-Request") === "true";
   const cacheKey = `img:${sig}`;
 
-  // Check caches
+  // Check local caches
   let buf = imageCache.get(cacheKey);
   if (!buf) {
     const disk = await getDiskCache("img", sig);
@@ -24,12 +26,23 @@ imgRouter.get("/:sig", async (c) => {
     }
   }
 
+  // Check peers (skip if this is already a peer request)
+  if (!buf && !isPeerRequest) {
+    const peerResult = await fetchFromPeers(`/img/${sig}`);
+    if (peerResult) {
+      buf = peerResult.data;
+      imageCache.set(cacheKey, buf, TTL.IMAGE);
+      await setDiskCache("img", sig, buf);
+    }
+  }
+
+  // Fetch from Solana
   if (!buf) {
     try {
       const controller = new AbortController();
       const timeout = setTimeout(() => controller.abort(), FETCH_TIMEOUT);
 
-      const { data, metadata } = await readAsset(sig);
+      const { data } = await readAsset(sig);
       clearTimeout(timeout);
 
       if (!data) return c.text("not found", 404);

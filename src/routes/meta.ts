@@ -1,6 +1,7 @@
 import { Hono } from "hono";
 import { readAsset, generateETag } from "../chain";
 import { metaCache, TTL, getDiskCache, setDiskCache } from "../cache";
+import { fetchFromPeers } from "../registry";
 
 export const metaRouter = new Hono();
 
@@ -17,6 +18,7 @@ metaRouter.get("/:sig", async (c) => {
   if (sig.endsWith(".json")) sig = sig.slice(0, -5);
   if (!sig || sig.length < 80) return c.json({ error: "invalid signature" }, 400);
 
+  const isPeerRequest = c.req.header("X-Peer-Request") === "true";
   const cacheKey = `meta:${sig}`;
   let raw: RawMeta | null = null;
 
@@ -32,6 +34,17 @@ metaRouter.get("/:sig", async (c) => {
     if (disk) {
       raw = JSON.parse(disk.toString("utf8"));
       metaCache.set(cacheKey, disk.toString("utf8"), TTL.META_IMMUTABLE);
+    }
+  }
+
+  // Check peers (skip if this is already a peer request)
+  if (!raw && !isPeerRequest) {
+    const peerResult = await fetchFromPeers(`/meta/${sig}.json`);
+    if (peerResult) {
+      raw = JSON.parse(peerResult.data.toString("utf8"));
+      const rawStr = JSON.stringify(raw);
+      metaCache.set(cacheKey, rawStr, TTL.META_IMMUTABLE);
+      await setDiskCache("meta", sig, rawStr);
     }
   }
 

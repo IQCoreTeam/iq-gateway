@@ -1,5 +1,6 @@
 import { Hono } from "hono";
 import { metaCache, imageCache, getStats } from "../cache";
+import { getPeers } from "../registry";
 
 export const healthRouter = new Hono();
 
@@ -16,6 +17,7 @@ function formatBytes(bytes: number): string {
 
 healthRouter.get("/health", async (c) => {
   const diskStats = await getStats();
+  const peers = await getPeers();
 
   return c.json({
     status: "ok",
@@ -31,6 +33,10 @@ healthRouter.get("/health", async (c) => {
         maxSize: formatBytes(diskStats.maxSize),
         usagePercent: Math.round(diskStats.usagePercent * 10) / 10,
       },
+    },
+    peers: {
+      count: peers.length,
+      urls: peers,
     },
   });
 });
