@@ -105,6 +105,18 @@ curl http://localhost:3000/meta/YOUR_TX_SIG.json
 curl http://localhost:3000/img/YOUR_TX_SIG.png
 ```
 
+## Configuration
+
+| Variable | Required | Description |
+|----------|----------|-------------|
+| `SOLANA_CLUSTER` | Yes | Network: `devnet`, `mainnet-beta`, or `testnet` |
+| `SOLANA_RPC_ENDPOINT` | Yes | RPC URL (must match cluster) |
+| `GATEWAY_URL` | Yes | Public URL of your gateway (for mint scripts) |
+| `PORT` | No | Server port (default: 3000) |
+| `BASE_PATH` | No | URL prefix if behind reverse proxy |
+| `CACHE_DIR` | No | Cache directory (default: ./cache) |
+| `MAX_CACHE_SIZE` | No | Max cache size before LRU pruning (default: 10GB) |
+
 ## Endpoints
 
 | Endpoint | Description |
@@ -118,6 +130,7 @@ curl http://localhost:3000/img/YOUR_TX_SIG.png
 
 ```bash
 # Edit .env
+SOLANA_CLUSTER=devnet
 SOLANA_RPC_ENDPOINT=https://api.devnet.solana.com
 PORT=3000
 BASE_PATH=          # Set if behind reverse proxy (e.g., /iq)
