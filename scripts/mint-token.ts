@@ -14,7 +14,7 @@ if (!RPC) {
   process.exit(1);
 }
 if (!GATEWAY_URL) {
-  console.error("GATEWAY_URL required (e.g. https://pi.nubs.site/iq)");
+  console.error("GATEWAY_URL required (e.g. https://gateway.iqlabs.dev)");
   process.exit(1);
 }
 if (!ASSET_SIG) {
