@@ -1,1 +1,1 @@
-export { readAsset, listUserAssets, listUserSessions, readUserState, generateETag } from "./reader";
+export { readAsset, listUserAssets, listUserSessions, readUserState, readTableRows, generateETag } from "./reader";
