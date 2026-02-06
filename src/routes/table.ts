@@ -2,13 +2,15 @@ import { Hono } from "hono";
 import { PublicKey } from "@solana/web3.js";
 import { createHash } from "node:crypto";
 import { readTableRows } from "../chain";
-import { MemoryCache } from "../cache/memory";
+import { MemoryCache, TTL } from "../cache/memory";
+import { getDiskCache, setDiskCache } from "../cache/disk";
 
 export const tableRouter = new Hono();
 
-// Cache for table rows - short TTL since data is mutable
 const rowsCache = new MemoryCache<string>(100);
-const ROWS_TTL = 30 * 1000; // 30 seconds
+
+// In-flight request deduplication — prevents thundering herd on cache miss
+const inflight = new Map<string, Promise<string>>();
 
 function isValidPublicKey(key: string): boolean {
   try {
@@ -24,7 +26,49 @@ function getCacheKey(tablePda: string, limit: number, before?: string): string {
   return createHash("sha256").update(raw).digest("hex").slice(0, 24);
 }
 
-// GET /table/:tablePda/rows - Read rows from a table PDA
+function buildResponse(tablePda: string, rows: Record<string, unknown>[], limit: number, before?: string) {
+  return {
+    tablePda,
+    rows,
+    count: rows.length,
+    limit,
+    before: before || null,
+    nextCursor: rows.length === limit ? (rows[rows.length - 1] as { __txSignature?: string })?.__txSignature : null,
+  };
+}
+
+async function fetchFromChain(
+  cacheKey: string,
+  tablePda: string,
+  limit: number,
+  before?: string,
+): Promise<string> {
+  const rows = await readTableRows(tablePda, { limit, before });
+  const json = JSON.stringify(buildResponse(tablePda, rows, limit, before));
+
+  rowsCache.set(cacheKey, json, TTL.ROWS);
+  setDiskCache("rows", cacheKey, json).catch(() => {});
+
+  return json;
+}
+
+function fetchDeduped(
+  cacheKey: string,
+  tablePda: string,
+  limit: number,
+  before?: string,
+): Promise<string> {
+  const existing = inflight.get(cacheKey);
+  if (existing) return existing;
+
+  const promise = fetchFromChain(cacheKey, tablePda, limit, before)
+    .finally(() => inflight.delete(cacheKey));
+
+  inflight.set(cacheKey, promise);
+  return promise;
+}
+
+// GET /table/:tablePda/rows
 tableRouter.get("/:tablePda/rows", async (c) => {
   const tablePda = c.req.param("tablePda");
   const limit = Math.min(Number(c.req.query("limit")) || 50, 100);
@@ -37,33 +81,27 @@ tableRouter.get("/:tablePda/rows", async (c) => {
 
   const cacheKey = getCacheKey(tablePda, limit, before);
 
-  // Check cache unless fresh requested
   if (!fresh) {
-    const cached = rowsCache.get(cacheKey);
-    if (cached) {
-      return c.json({
-        ...JSON.parse(cached),
-        cached: true,
-      });
+    // Tier 1: Memory cache
+    const mem = rowsCache.get(cacheKey);
+    if (mem) {
+      return c.json({ ...JSON.parse(mem), cached: true });
+    }
+
+    // Tier 2: Disk cache — serve stale, refresh in background
+    const disk = await getDiskCache("rows", cacheKey);
+    if (disk) {
+      const json = disk.toString("utf8");
+      rowsCache.set(cacheKey, json, TTL.ROWS);
+      fetchDeduped(cacheKey, tablePda, limit, before).catch(() => {});
+      return c.json({ ...JSON.parse(json), cached: true });
     }
   }
 
+  // Tier 3: Chain read with dedup
   try {
-    const rows = await readTableRows(tablePda, { limit, before });
-
-    const response = {
-      tablePda,
-      rows,
-      count: rows.length,
-      limit,
-      before: before || null,
-      nextCursor: rows.length === limit ? rows[rows.length - 1]?.__txSignature : null,
-    };
-
-    // Cache the result
-    rowsCache.set(cacheKey, JSON.stringify(response), ROWS_TTL);
-
-    return c.json({ ...response, cached: false });
+    const json = await fetchDeduped(cacheKey, tablePda, limit, before);
+    return c.json({ ...JSON.parse(json), cached: false });
   } catch (e) {
     const message = e instanceof Error ? e.message : "unknown error";
 
@@ -76,13 +114,13 @@ tableRouter.get("/:tablePda/rows", async (c) => {
   }
 });
 
-// GET /table/cache/stats - Cache statistics
+// GET /table/cache/stats
 tableRouter.get("/cache/stats", (c) => {
   return c.json({
     entries: rowsCache.size(),
-    ttl: ROWS_TTL,
+    ttl: TTL.ROWS,
+    inflight: inflight.size,
   });
 });
 
-// Export cache for health endpoint
-export { rowsCache };
+export { rowsCache, inflight };

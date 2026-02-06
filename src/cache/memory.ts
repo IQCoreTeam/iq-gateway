@@ -64,7 +64,8 @@ export const imageCache = new MemoryCache<Buffer>(200);     // Image buffers
 
 // TTL constants (in milliseconds)
 export const TTL = {
-  META_MUTABLE: 60 * 1000,           // 1 minute for mutable metadata
-  META_IMMUTABLE: 24 * 60 * 60 * 1000, // 24 hours for immutable
-  IMAGE: 24 * 60 * 60 * 1000,          // 24 hours for images
+  META_MUTABLE: 60 * 1000,              // 1 minute for mutable metadata
+  META_IMMUTABLE: 24 * 60 * 60 * 1000,  // 24 hours for immutable
+  IMAGE: 24 * 60 * 60 * 1000,           // 24 hours for images
+  ROWS: 5 * 60 * 1000,                  // 5 minutes for table rows
 } as const;

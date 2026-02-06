@@ -1,6 +1,6 @@
 import { Hono } from "hono";
 import { metaCache, imageCache, getStats } from "../cache";
-import { rowsCache } from "./table";
+import { rowsCache, inflight } from "./table";
 
 export const healthRouter = new Hono();
 
@@ -26,6 +26,7 @@ healthRouter.get("/health", async (c) => {
         meta: metaCache.size(),
         images: imageCache.size(),
         tableRows: rowsCache.size(),
+        inflightReads: inflight.size,
       },
       disk: {
         entries: diskStats.entryCount,

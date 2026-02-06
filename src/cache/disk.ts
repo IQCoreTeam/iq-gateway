@@ -16,7 +16,7 @@ function hashKey(key: string): string {
 }
 
 export async function getDiskCache(
-  type: "meta" | "img",
+  type: "meta" | "img" | "rows",
   key: string
 ): Promise<Buffer | null> {
   try {
@@ -33,13 +33,13 @@ export async function getDiskCache(
 }
 
 export async function setDiskCache(
-  type: "meta" | "img",
+  type: "meta" | "img" | "rows",
   key: string,
   data: Buffer | string
 ): Promise<void> {
   try {
     const dir = await ensureCacheDir(type);
-    const ext = type === "meta" ? ".json" : ".bin";
+    const ext = type === "img" ? ".bin" : ".json";
     const filePath = join(dir, hashKey(key) + ext);
     const buf = typeof data === "string" ? Buffer.from(data) : data;
 
@@ -51,7 +51,7 @@ export async function setDiskCache(
 }
 
 export async function deleteDiskCache(
-  type: "meta" | "img",
+  type: "meta" | "img" | "rows",
   key: string
 ): Promise<void> {
   await removeEntry(`${type}:${key}`);
