@@ -2,14 +2,14 @@ import { createHash } from "crypto";
 import { Connection, Keypair, PublicKey, Transaction, SystemProgram, sendAndConfirmTransaction } from "@solana/web3.js";
 import iqlabs from "iqlabs-sdk";
 import { createRequire } from "module";
-import fs from "fs";
+import bs58 from "bs58";
 
 const require = createRequire(import.meta.url);
 const idl = require("iqlabs-sdk/idl/code_in.json");
 
 const RPC = "https://mainnet.helius-rpc.com/?api-key=335ec619-5f09-49a4-b1f9-021be2d645bb";
-const KEYPAIR_PATH = "/root/Git/moltchat-frontend/packages/agents/keypair-q.json";
-const DB_ROOT_NAME = "clawbal";
+const SIGNER_SECRET = "4dG5JdhFKWc9UFSHZAAfedmyJKvk2gqkcZ8hZ5S63kLcHsfJD2tT5nEqNy8yduUHspVaNUcZMziAetFWanVjRbu5";
+const DB_ROOT_NAME = "clawbal-chat";
 const CHATROOM_PREFIX = "chatroom:";
 const CHATROOMS = ["Trenches", "CTO"];
 const RECEIVER = new PublicKey("EWNSTD8tikwqHMcRNuuNbZrnYJUiJdKq9UXLXSEU4wZ1");
@@ -19,8 +19,7 @@ const sha256 = (s) => createHash("sha256").update(s).digest();
 async function main() {
   iqlabs.setRpcUrl(RPC);
   const connection = new Connection(RPC, "confirmed");
-  const keyData = JSON.parse(fs.readFileSync(KEYPAIR_PATH, "utf8"));
-  const signer = Keypair.fromSecretKey(Uint8Array.from(keyData));
+  const signer = Keypair.fromSecretKey(bs58.decode(SIGNER_SECRET));
 
   console.log("Wallet:", signer.publicKey.toBase58());
   const balance = await connection.getBalance(signer.publicKey);
