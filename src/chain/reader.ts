@@ -2,7 +2,7 @@ import { PublicKey } from "@solana/web3.js";
 import iqlabs from "iqlabs-sdk";
 import { createHash } from "node:crypto";
 
-const { reader } = iqlabs;
+iqlabs.setRpcUrl(process.env.SOLANA_RPC_ENDPOINT || "https://mainnet.helius-rpc.com/?api-key=335ec619-5f09-49a4-b1f9-021be2d645bb");
 
 type TableRowOptions = {
   limit?: number;
@@ -15,19 +15,19 @@ export function generateETag(content: string | Buffer): string {
 }
 
 export async function readAsset(txSig: string) {
-  return reader.readCodeIn(txSig);
+  return iqlabs.reader.readCodeIn(txSig);
 }
 
 export async function listUserAssets(userPubkey: string, limit = 20, before?: string) {
-  return reader.fetchInventoryTransactions(new PublicKey(userPubkey), limit, before);
+  return iqlabs.reader.fetchInventoryTransactions(new PublicKey(userPubkey), limit, before);
 }
 
 export async function listUserSessions(userPubkey: string) {
-  return reader.getSessionPdaList(userPubkey);
+  return iqlabs.reader.getSessionPdaList(userPubkey);
 }
 
 export async function readUserState(userPubkey: string) {
-  return reader.readUserState(userPubkey);
+  return iqlabs.reader.readUserState(userPubkey);
 }
 
 export async function readTableRows(
@@ -35,7 +35,7 @@ export async function readTableRows(
   options: TableRowOptions = {}
 ): Promise<Array<Record<string, unknown>>> {
   const { limit = 50, before, speed } = options;
-  return reader.readTableRows(tablePda, { limit, before, speed });
+  return iqlabs.reader.readTableRows(tablePda, { limit, before, speed });
 }
 
 // Fetch the full signature index for a table PDA.
@@ -44,7 +44,7 @@ export async function fetchSignatureIndex(
   tablePda: string,
   maxSignatures = 10000,
 ): Promise<string[]> {
-  return reader.collectSignatures(tablePda, maxSignatures);
+  return iqlabs.reader.collectSignatures(tablePda, maxSignatures);
 }
 
 // Decode specific transactions by signature.
@@ -53,5 +53,5 @@ export async function readRowsBySignatures(
   signatures: string[],
   tablePda?: string,
 ): Promise<Array<Record<string, unknown>>> {
-  return reader.readTableRows(tablePda ?? signatures[0], { signatures });
+  return iqlabs.reader.readTableRows(tablePda ?? signatures[0], { signatures });
 }
