@@ -153,7 +153,7 @@ tableRouter.get("/:tablePda/index", async (c) => {
 // The full slice response is also cached briefly to handle repeated requests.
 
 const SLICE_MAX = 50;
-const SLICE_ROW_TTL = 60 * 60 * 1000; // 1 hour — on-chain rows are immutable
+const SLICE_ROW_TTL = 24 * 60 * 60 * 1000; // 24 hours — on-chain rows are immutable
 
 tableRouter.get("/:tablePda/slice", async (c) => {
   const tablePda = c.req.param("tablePda");
@@ -182,15 +182,22 @@ tableRouter.get("/:tablePda/slice", async (c) => {
     const rows: Array<Record<string, unknown>> = [];
     const uncached: string[] = [];
 
-    // Gather cached rows, collect uncached sigs
+    // Gather cached rows (memory → disk), collect uncached sigs
     for (const sig of sigs) {
       const rowKey = cacheKey("row", sig);
-      const cached = sliceCache.get(rowKey);
-      if (cached) {
-        rows.push(JSON.parse(cached));
-      } else {
-        uncached.push(sig);
+      const mem = sliceCache.get(rowKey);
+      if (mem) {
+        rows.push(JSON.parse(mem));
+        continue;
       }
+      const disk = await getDiskCache("rows", rowKey);
+      if (disk) {
+        const json = disk.toString("utf8");
+        sliceCache.set(rowKey, json, SLICE_ROW_TTL);
+        rows.push(JSON.parse(json));
+        continue;
+      }
+      uncached.push(sig);
     }
 
     // Fetch uncached rows from chain
@@ -203,7 +210,10 @@ tableRouter.get("/:tablePda/slice", async (c) => {
         const sig = (row as { __txSignature?: string }).__txSignature;
         if (sig) {
           freshMap.set(sig, row);
-          sliceCache.set(cacheKey("row", sig), JSON.stringify(row), SLICE_ROW_TTL);
+          const rowJson = JSON.stringify(row);
+          const rowKey = cacheKey("row", sig);
+          sliceCache.set(rowKey, rowJson, SLICE_ROW_TTL);
+          setDiskCache("rows", rowKey, rowJson).catch(() => {});
         }
       }
 
