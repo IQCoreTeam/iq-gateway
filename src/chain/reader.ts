@@ -37,3 +37,21 @@ export async function readTableRows(
   const { limit = 50, before, speed } = options;
   return reader.readTableRows(tablePda, { limit, before, speed });
 }
+
+// Fetch the full signature index for a table PDA.
+// Returns signatures newest-first (chain default order).
+export async function fetchSignatureIndex(
+  tablePda: string,
+  maxSignatures = 10000,
+): Promise<string[]> {
+  return reader.collectSignatures(tablePda, maxSignatures);
+}
+
+// Decode specific transactions by signature.
+// Returns parsed rows in the same format as readTableRows.
+export async function readRowsBySignatures(
+  signatures: string[],
+  tablePda?: string,
+): Promise<Array<Record<string, unknown>>> {
+  return reader.readTableRows(tablePda ?? signatures[0], { signatures });
+}
