@@ -60,31 +60,32 @@ tableRouter.get("/:tablePda/rows", async (c) => {
   }
 
   const key = cacheKey(tablePda, String(limit), before || "");
-  // Latest messages (no cursor) need short TTL so new messages show up fast.
-  // Older pages (with cursor) rarely change — keep the longer TTL.
-  const ttl = before ? TTL.ROWS : 10_000; // 10s for latest, 5min for older pages
+  const isHead = !before; // Head page = latest messages, needs background refresh
+  const ttl = isHead ? 10_000 : TTL.ROWS; // 10s memory for latest, 5min for older
 
   async function fetchRows(): Promise<string> {
     const rows = await readTableRows(tablePda, { limit, before });
     const json = JSON.stringify(buildRowsResponse(tablePda, rows, limit, before));
     rowsCache.set(key, json, ttl);
-    if (before) setDiskCache("rows", key, json).catch(() => {});
+    setDiskCache("rows", key, json).catch(() => {});
     return json;
   }
 
   if (!fresh) {
     const mem = rowsCache.get(key);
-    if (mem) return c.json({ ...JSON.parse(mem), cached: true });
+    if (mem) {
+      // Head page: always kick off background refresh so next poll gets fresh data
+      if (isHead) deduped(key, fetchRows).catch(() => {});
+      return c.json({ ...JSON.parse(mem), cached: true });
+    }
 
-    // Only check disk for paginated (older) rows — latest should always be fresh
-    if (before) {
-      const disk = await getDiskCache("rows", key);
-      if (disk) {
-        const json = disk.toString("utf8");
-        rowsCache.set(key, json, ttl);
-        deduped(key, fetchRows).catch(() => {});
-        return c.json({ ...JSON.parse(json), cached: true });
-      }
+    const disk = await getDiskCache("rows", key);
+    if (disk) {
+      const json = disk.toString("utf8");
+      rowsCache.set(key, json, ttl);
+      // Always refresh in background — serves stale instantly, updates for next request
+      deduped(key, fetchRows).catch(() => {});
+      return c.json({ ...JSON.parse(json), cached: true });
     }
   }
 
