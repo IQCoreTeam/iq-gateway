@@ -52,7 +52,7 @@ export async function getTotalSize(): Promise<number> {
 
 export async function recordEntry(
   key: string,
-  type: "meta" | "img" | "rows",
+  type: "meta" | "img" | "rows" | "user",
   path: string,
   size: number
 ): Promise<void> {
@@ -129,16 +129,17 @@ export async function getStats(): Promise<{
 }
 
 // Cleanup expired entries (call periodically)
-export async function cleanupExpired(metaTtlMs: number, imgTtlMs: number, rowsTtlMs = 24 * 60 * 60 * 1000): Promise<number> {
+export async function cleanupExpired(metaTtlMs: number, imgTtlMs: number, rowsTtlMs = 24 * 60 * 60 * 1000, userTtlMs = 5 * 60 * 1000): Promise<number> {
   const db = await getDb();
   const now = Date.now();
 
-  const expired = db.query<{ key: string; path: string }, [number, number, number]>(
+  const expired = db.query<{ key: string; path: string }, [number, number, number, number]>(
     `SELECT key, path FROM cache_entries
      WHERE (type = 'meta' AND created_at < ?)
         OR (type = 'img' AND created_at < ?)
-        OR (type = 'rows' AND created_at < ?)`,
-    [now - metaTtlMs, now - imgTtlMs, now - rowsTtlMs]
+        OR (type = 'rows' AND created_at < ?)
+        OR (type = 'user' AND created_at < ?)`,
+    [now - metaTtlMs, now - imgTtlMs, now - rowsTtlMs, now - userTtlMs]
   ).all();
 
   for (const entry of expired) {

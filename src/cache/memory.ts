@@ -61,6 +61,7 @@ export class MemoryCache<T> {
 // Singleton caches
 export const metaCache = new MemoryCache<string>(500);      // JSON strings
 export const imageCache = new MemoryCache<Buffer>(200);     // Image buffers
+export const userStateCache = new MemoryCache<string>(200); // User state JSON
 
 // TTL constants (in milliseconds)
 export const TTL = {
@@ -68,4 +69,5 @@ export const TTL = {
   META_IMMUTABLE: 24 * 60 * 60 * 1000,  // 24 hours for immutable
   IMAGE: 24 * 60 * 60 * 1000,           // 24 hours for images
   ROWS: 5 * 60 * 1000,                  // 5 minutes for table rows
+  USER_STATE: 5 * 60 * 1000,            // 5 minutes for user state/profiles
 } as const;
