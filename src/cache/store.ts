@@ -135,10 +135,10 @@ export async function cleanupExpired(metaTtlMs: number, imgTtlMs: number, rowsTt
 
   const expired = db.query<{ key: string; path: string }, [number, number, number, number]>(
     `SELECT key, path FROM cache_entries
-     WHERE (type = 'meta' AND created_at < ?)
-        OR (type = 'img' AND created_at < ?)
-        OR (type = 'rows' AND created_at < ?)
-        OR (type = 'user' AND created_at < ?)`,
+     WHERE (type = 'meta' AND last_accessed < ?)
+        OR (type = 'img' AND last_accessed < ?)
+        OR (type = 'rows' AND last_accessed < ?)
+        OR (type = 'user' AND last_accessed < ?)`,
     [now - metaTtlMs, now - imgTtlMs, now - rowsTtlMs, now - userTtlMs]
   ).all();
 
