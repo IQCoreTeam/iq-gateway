@@ -1,7 +1,9 @@
 node_modules/
 dist/
 /cache/
+/cache-dev/
 .env
+.env.*
 bun.lockb
 *.log
 test-keypair.json
