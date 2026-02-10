@@ -1,6 +1,6 @@
-import { Database } from "bun:sqlite";
+import Database from "better-sqlite3";
 import { join } from "node:path";
-import { mkdir, unlink, stat } from "node:fs/promises";
+import { mkdir, unlink } from "node:fs/promises";
 
 const CACHE_DIR = process.env.CACHE_DIR || "./cache";
 const DB_PATH = join(CACHE_DIR, "cache.db");
@@ -23,13 +23,13 @@ function parseSize(size: string): number {
 
 const MAX_CACHE_SIZE = parseSize(process.env.MAX_CACHE_SIZE || "10GB");
 
-let db: Database | null = null;
+let db: Database.Database | null = null;
 
-async function getDb(): Promise<Database> {
+async function getDb(): Promise<Database.Database> {
   if (db) return db;
   await mkdir(CACHE_DIR, { recursive: true });
   db = new Database(DB_PATH);
-  db.run(`
+  db.exec(`
     CREATE TABLE IF NOT EXISTS cache_entries (
       key TEXT PRIMARY KEY,
       type TEXT NOT NULL,
@@ -39,14 +39,14 @@ async function getDb(): Promise<Database> {
       last_accessed INTEGER NOT NULL
     )
   `);
-  db.run(`CREATE INDEX IF NOT EXISTS idx_last_accessed ON cache_entries(last_accessed)`);
-  db.run(`CREATE INDEX IF NOT EXISTS idx_type ON cache_entries(type)`);
+  db.exec(`CREATE INDEX IF NOT EXISTS idx_last_accessed ON cache_entries(last_accessed)`);
+  db.exec(`CREATE INDEX IF NOT EXISTS idx_type ON cache_entries(type)`);
   return db;
 }
 
 export async function getTotalSize(): Promise<number> {
   const db = await getDb();
-  const result = db.query<{ total: number }, []>("SELECT COALESCE(SUM(size), 0) as total FROM cache_entries").get();
+  const result = db.prepare("SELECT COALESCE(SUM(size), 0) as total FROM cache_entries").get() as { total: number };
   return result?.total || 0;
 }
 
@@ -58,37 +58,39 @@ export async function recordEntry(
 ): Promise<void> {
   const db = await getDb();
   const now = Date.now();
-  db.run(
+  db.prepare(
     `INSERT OR REPLACE INTO cache_entries (key, type, path, size, created_at, last_accessed)
-     VALUES (?, ?, ?, ?, ?, ?)`,
-    [key, type, path, size, now, now]
-  );
+     VALUES (?, ?, ?, ?, ?, ?)`
+  ).run(key, type, path, size, now, now);
+
   await pruneIfNeeded();
 }
 
 export async function touchEntry(key: string): Promise<void> {
   const db = await getDb();
-  db.run("UPDATE cache_entries SET last_accessed = ? WHERE key = ?", [Date.now(), key]);
+  db.prepare("UPDATE cache_entries SET last_accessed = ? WHERE key = ?").run(Date.now(), key);
 }
 
 export async function removeEntry(key: string): Promise<void> {
   const db = await getDb();
-  const entry = db.query<{ path: string }, [string]>("SELECT path FROM cache_entries WHERE key = ?").get(key);
+  const entry = db.prepare("SELECT path FROM cache_entries WHERE key = ?").get(key) as { path: string } | undefined;
   if (entry) {
-    await unlink(entry.path).catch(() => {});
-    db.run("DELETE FROM cache_entries WHERE key = ?", [key]);
+    await unlink(entry.path).catch(() => { });
+    db.prepare("DELETE FROM cache_entries WHERE key = ?").run(key);
   }
 }
 
 export async function getEntry(key: string): Promise<{ path: string; size: number } | null> {
   const db = await getDb();
-  const entry = db.query<{ path: string; size: number }, [string]>(
+  const entry = db.prepare(
     "SELECT path, size FROM cache_entries WHERE key = ?"
-  ).get(key);
+  ).get(key) as { path: string; size: number } | undefined;
+
   if (entry) {
     await touchEntry(key);
+    return entry;
   }
-  return entry || null;
+  return null;
 }
 
 async function pruneIfNeeded(): Promise<void> {
@@ -98,14 +100,16 @@ async function pruneIfNeeded(): Promise<void> {
   if (total <= MAX_CACHE_SIZE) return;
 
   const db = await getDb();
-  const entries = db.query<{ key: string; path: string; size: number }, []>(
+  const entries = db.prepare(
     "SELECT key, path, size FROM cache_entries ORDER BY last_accessed ASC"
-  ).all();
+  ).all() as { key: string; path: string; size: number }[];
+
+  const deleteStmt = db.prepare("DELETE FROM cache_entries WHERE key = ?");
 
   for (const entry of entries) {
     if (total <= MAX_CACHE_SIZE * 0.9) break; // Prune to 90% to avoid constant pruning
-    await unlink(entry.path).catch(() => {});
-    db.run("DELETE FROM cache_entries WHERE key = ?", [entry.key]);
+    await unlink(entry.path).catch(() => { });
+    deleteStmt.run(entry.key);
     total -= entry.size;
   }
 }
@@ -118,7 +122,7 @@ export async function getStats(): Promise<{
 }> {
   const db = await getDb();
   const totalSize = await getTotalSize();
-  const countResult = db.query<{ count: number }, []>("SELECT COUNT(*) as count FROM cache_entries").get();
+  const countResult = db.prepare("SELECT COUNT(*) as count FROM cache_entries").get() as { count: number };
   const entryCount = countResult?.count || 0;
   return {
     totalSize,
@@ -133,18 +137,19 @@ export async function cleanupExpired(metaTtlMs: number, imgTtlMs: number, rowsTt
   const db = await getDb();
   const now = Date.now();
 
-  const expired = db.query<{ key: string; path: string }, [number, number, number, number]>(
+  const expired = db.prepare(
     `SELECT key, path FROM cache_entries
      WHERE (type = 'meta' AND last_accessed < ?)
         OR (type = 'img' AND last_accessed < ?)
         OR (type = 'rows' AND last_accessed < ?)
-        OR (type = 'user' AND last_accessed < ?)`,
-    [now - metaTtlMs, now - imgTtlMs, now - rowsTtlMs, now - userTtlMs]
-  ).all();
+        OR (type = 'user' AND last_accessed < ?)`
+  ).all(now - metaTtlMs, now - imgTtlMs, now - rowsTtlMs, now - userTtlMs) as { key: string; path: string }[];
+
+  const deleteStmt = db.prepare("DELETE FROM cache_entries WHERE key = ?");
 
   for (const entry of expired) {
-    await unlink(entry.path).catch(() => {});
-    db.run("DELETE FROM cache_entries WHERE key = ?", [entry.key]);
+    await unlink(entry.path).catch(() => { });
+    deleteStmt.run(entry.key);
   }
 
   return expired.length;
