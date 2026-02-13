@@ -1,6 +1,6 @@
 import { Database } from "bun:sqlite";
 import { join } from "node:path";
-import { mkdir, unlink, stat } from "node:fs/promises";
+import { mkdir, unlink } from "node:fs/promises";
 
 const CACHE_DIR = process.env.CACHE_DIR || "./cache";
 const DB_PATH = join(CACHE_DIR, "cache.db");
@@ -128,24 +128,3 @@ export async function getStats(): Promise<{
   };
 }
 
-// Cleanup expired entries (call periodically)
-export async function cleanupExpired(metaTtlMs: number, imgTtlMs: number, rowsTtlMs = 24 * 60 * 60 * 1000, userTtlMs = 5 * 60 * 1000): Promise<number> {
-  const db = await getDb();
-  const now = Date.now();
-
-  const expired = db.query<{ key: string; path: string }, [number, number, number, number]>(
-    `SELECT key, path FROM cache_entries
-     WHERE (type = 'meta' AND last_accessed < ?)
-        OR (type = 'img' AND last_accessed < ?)
-        OR (type = 'rows' AND last_accessed < ?)
-        OR (type = 'user' AND last_accessed < ?)`,
-    [now - metaTtlMs, now - imgTtlMs, now - rowsTtlMs, now - userTtlMs]
-  ).all();
-
-  for (const entry of expired) {
-    await unlink(entry.path).catch(() => {});
-    db.run("DELETE FROM cache_entries WHERE key = ?", [entry.key]);
-  }
-
-  return expired.length;
-}
