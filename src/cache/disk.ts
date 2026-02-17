@@ -16,7 +16,7 @@ function hashKey(key: string): string {
 }
 
 export async function getDiskCache(
-  type: "meta" | "img" | "rows" | "user",
+  type: "meta" | "img" | "rows" | "user" | "render" | "view",
   key: string
 ): Promise<Buffer | null> {
   try {
@@ -33,7 +33,7 @@ export async function getDiskCache(
 }
 
 export async function setDiskCache(
-  type: "meta" | "img" | "rows" | "user",
+  type: "meta" | "img" | "rows" | "user" | "render" | "view",
   key: string,
   data: Buffer | string
 ): Promise<void> {
@@ -51,7 +51,7 @@ export async function setDiskCache(
 }
 
 export async function deleteDiskCache(
-  type: "meta" | "img" | "rows" | "user",
+  type: "meta" | "img" | "rows" | "user" | "render" | "view",
   key: string
 ): Promise<void> {
   await removeEntry(`${type}:${key}`);

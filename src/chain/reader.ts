@@ -47,6 +47,27 @@ export function generateETag(content: string | Buffer): string {
   return `"${createHash("sha256").update(content).digest("hex").slice(0, 16)}"`;
 }
 
+/** Decode chain asset data: handles data URLs, base64, and raw bytes. */
+export function decodeAssetData(data: string): Buffer {
+  if (data.startsWith("data:")) {
+    return Buffer.from(data.split(",")[1], "base64");
+  }
+  if (/^[A-Za-z0-9+/=]+$/.test(data.slice(0, 100)) && data.length > 100) {
+    return Buffer.from(data, "base64");
+  }
+  return Buffer.from(data);
+}
+
+/** Detect image content type from magic bytes. Returns null if not an image. */
+export function detectImageType(buf: Buffer): string | null {
+  if (buf.length < 4) return null;
+  if (buf[0] === 0x89 && buf[1] === 0x50) return "image/png";
+  if (buf[0] === 0xff && buf[1] === 0xd8) return "image/jpeg";
+  if (buf[0] === 0x47 && buf[1] === 0x49) return "image/gif";
+  if (buf.length > 10 && buf[8] === 0x57 && buf[9] === 0x45) return "image/webp";
+  return null;
+}
+
 export async function readAsset(txSig: string) {
   return withRetry(() => iqlabs.reader.readCodeIn(txSig));
 }

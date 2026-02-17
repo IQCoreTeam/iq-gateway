@@ -1,5 +1,5 @@
 import { Hono } from "hono";
-import { readAsset, generateETag } from "../chain";
+import { readAsset, generateETag, decodeAssetData, detectImageType } from "../chain";
 import { imageCache, TTL, getDiskCache, setDiskCache } from "../cache";
 
 export const imgRouter = new Hono();
@@ -29,19 +29,12 @@ imgRouter.get("/:sig", async (c) => {
       const controller = new AbortController();
       const timeout = setTimeout(() => controller.abort(), FETCH_TIMEOUT);
 
-      const { data, metadata } = await readAsset(sig);
+      const { data } = await readAsset(sig);
       clearTimeout(timeout);
 
       if (!data) return c.text("not found", 404);
 
-      // Decode: data URL, base64, or raw
-      if (data.startsWith("data:")) {
-        buf = Buffer.from(data.split(",")[1], "base64");
-      } else if (/^[A-Za-z0-9+/=]+$/.test(data.slice(0, 100))) {
-        buf = Buffer.from(data, "base64");
-      } else {
-        buf = Buffer.from(data);
-      }
+      buf = decodeAssetData(data);
 
       imageCache.set(cacheKey, buf, TTL.IMAGE);
       await setDiskCache("img", sig, buf);
@@ -53,11 +46,7 @@ imgRouter.get("/:sig", async (c) => {
     }
   }
 
-  // Detect content type from magic bytes
-  let contentType = "image/png";
-  if (buf[0] === 0xff && buf[1] === 0xd8) contentType = "image/jpeg";
-  else if (buf[0] === 0x47 && buf[1] === 0x49) contentType = "image/gif";
-  else if (buf[8] === 0x57 && buf[9] === 0x45) contentType = "image/webp";
+  const contentType = detectImageType(buf) || "image/png";
 
   const etag = generateETag(buf);
   if (c.req.header("If-None-Match") === etag) return c.body(null, 304);
