@@ -30,15 +30,61 @@ function renderHtmlPage(text: string, sig: string): string {
 <style>
 * { margin:0; padding:0; box-sizing:border-box; }
 
+@keyframes scanmove {
+  0%   { background-position: 0 0; }
+  100% { background-position: 0 4px; }
+}
+@keyframes scanbar {
+  0%   { transform: translateY(-100px); }
+  100% { transform: translateY(calc(100vh + 100px)); }
+}
+@keyframes pulse {
+  0%, 100% { opacity: 1; }
+  50%      { opacity: 0.6; }
+}
+
 body {
   background: #002100;
   min-height: 100vh;
   display: flex;
+  flex-direction: column;
   align-items: center;
   justify-content: center;
   padding: 24px;
   font-family: 'DejaVu Sans Mono', 'Courier New', Courier, monospace;
+  position: relative;
+  overflow-x: hidden;
 }
+
+/* Full-page scanline overlay */
+body::before {
+  content: '';
+  position: fixed;
+  top: 0; left: 0; right: 0; bottom: 0;
+  background-image: repeating-linear-gradient(
+    0deg, transparent, transparent 2px,
+    rgba(0, 255, 0, 0.03) 2px, rgba(0, 255, 0, 0.03) 4px
+  );
+  animation: scanmove 8s linear infinite;
+  pointer-events: none;
+  z-index: 0;
+}
+
+/* Moving scan bar across the whole page */
+body::after {
+  content: '';
+  position: fixed;
+  top: 0; left: 0; right: 0;
+  height: 100px;
+  background: linear-gradient(
+    to bottom, transparent 0%,
+    rgba(65, 255, 0, 0.06) 50%, transparent 100%
+  );
+  animation: scanbar 4s linear infinite;
+  pointer-events: none;
+  z-index: 9999;
+}
+
 
 /* Win95 window — raised 3D border */
 .window {
@@ -51,7 +97,10 @@ body {
   border-bottom: 2px solid #404040;
   box-shadow:
     inset 1px 1px 0 #fff,
-    inset -1px -1px 0 #000;
+    inset -1px -1px 0 #000,
+    0 0 60px rgba(65, 255, 0, 0.12),
+    0 0 120px rgba(65, 255, 0, 0.06);
+  z-index: 1;
 }
 
 /* Title bar — black → dark green gradient */
@@ -66,10 +115,17 @@ body {
   user-select: none;
 }
 .title-bar .title {
+  display: flex;
+  align-items: center;
+  gap: 8px;
   color: #41FF00;
   font-size: 16px;
   font-weight: bold;
   text-shadow: 0 0 8px #00ff22;
+}
+.title-bar .title .title-logo {
+  width: 28px; height: 28px;
+  filter: brightness(1.2);
 }
 
 /* Win95 title buttons */
@@ -105,6 +161,8 @@ body {
   border-left: 2px solid #808080;
   border-right: 2px solid #dfdfdf;
   border-bottom: 2px solid #dfdfdf;
+  position: relative;
+  overflow: hidden;
 }
 .content-area {
   background: #0a0a0a;
@@ -119,6 +177,7 @@ body {
   white-space: pre-wrap;
   word-break: break-word;
   text-shadow: 0 0 6px rgba(65, 255, 0, 0.4);
+  position: relative;
   /* Scanlines */
   background-image:
     repeating-linear-gradient(
@@ -137,18 +196,37 @@ body {
   margin: 0;
 }
 
-/* Win95 scrollbar */
-.content-area::-webkit-scrollbar { width: 18px; }
+/* CRT scan bar on content */
+.content-wrap::after {
+  content: '';
+  position: absolute;
+  top: 0; left: 0; right: 0;
+  height: 60px;
+  background: linear-gradient(
+    to bottom, transparent 0%,
+    rgba(65, 255, 0, 0.08) 50%, transparent 100%
+  );
+  animation: scanbar 3s linear infinite;
+  pointer-events: none;
+  z-index: 2;
+}
+
+/* Custom scrollbar — green on dark */
+.content-area::-webkit-scrollbar { width: 14px; }
 .content-area::-webkit-scrollbar-track {
-  background: #c0c0c0;
-  border-left: 1px solid #808080;
+  background: rgba(0, 0, 0, 0.3);
+  border-radius: 6px;
 }
 .content-area::-webkit-scrollbar-thumb {
-  background: #c0c0c0;
-  border-top: 2px solid #dfdfdf;
-  border-left: 2px solid #dfdfdf;
-  border-right: 2px solid #404040;
-  border-bottom: 2px solid #404040;
+  background: rgba(65, 255, 0, 0.3);
+  border-radius: 6px;
+  border: 2px solid rgba(0, 0, 0, 0.3);
+}
+.content-area::-webkit-scrollbar-thumb:hover {
+  background: rgba(65, 255, 0, 0.5);
+}
+.content-area::-webkit-scrollbar-thumb:active {
+  background: rgba(65, 255, 0, 0.7);
 }
 
 /* Footer — Win95 status bar with inset panels */
@@ -182,6 +260,20 @@ body {
   background: #41FF00;
   display: inline-block;
   box-shadow: 0 0 4px #41FF00;
+  animation: pulse 2s ease-in-out infinite;
+}
+
+.status-panel.sol-panel {
+  flex: 0 0 auto;
+  padding: 0 4px;
+  justify-content: center;
+  background: transparent;
+  border: none;
+}
+.status-sol-internet {
+  height: 72px;
+  filter: drop-shadow(0 0 6px rgba(65, 255, 0, 0.5));
+  vertical-align: middle;
 }
 
 /* Selection color */
@@ -189,9 +281,13 @@ body {
 </style>
 </head>
 <body>
+
 <div class="window">
   <div class="title-bar">
-    <span class="title">IQLabs — ${escapeMarkup(shortSig)}</span>
+    <span class="title">
+      <img class="title-logo" src="/iq_logo.svg" alt=""/>
+      IQLabs — ${escapeMarkup(shortSig)}
+    </span>
     <div class="title-buttons">
       <button>_</button><button>□</button><button>✕</button>
     </div>
@@ -200,10 +296,13 @@ body {
     <div class="content-area">${isJson ? "<pre>" : ""}${displayContent}${isJson ? "</pre>" : ""}</div>
   </div>
   <div class="status-bar">
-    <div class="status-panel">inscribed on solana via iqlabs • gateway.iqlabs.dev</div>
+    <div class="status-panel">inscribed on solana via iqlabs</div>
     <div class="status-panel right"><span class="status-dot"></span> ON-CHAIN</div>
+    <div class="status-panel sol-panel"><img class="status-sol-internet" src="/solana-internet.png" alt="Solana Internet"/></div>
   </div>
 </div>
+
+
 </body>
 </html>`;
 }

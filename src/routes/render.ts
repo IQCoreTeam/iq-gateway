@@ -122,8 +122,11 @@ function generateSvg(text: string, sig: string): string {
   <!-- Title bar -->
   <rect x="${BORDER}" y="${BORDER}" width="${WIDTH - BORDER * 2}" height="${TITLE_H}" fill="url(#titleGrad)"/>
 
-  <!-- Title text -->
-  <text x="${BORDER + 10}" y="${BORDER + 24}" font-family="DejaVu Sans Mono, monospace" font-size="16" font-weight="bold" fill="${IQ_GREEN}" filter="url(#glow)">IQLabs — ${escapeMarkup(shortSig)}</text>
+  <!-- IQ logo in title bar -->
+  <image href="./public/iq_logo.svg" x="${BORDER + 6}" y="${BORDER + 4}" width="28" height="28"/>
+
+  <!-- Title text (offset for logo) -->
+  <text x="${BORDER + 40}" y="${BORDER + 24}" font-family="DejaVu Sans Mono, monospace" font-size="16" font-weight="bold" fill="${IQ_GREEN}" filter="url(#glow)">IQLabs — ${escapeMarkup(shortSig)}</text>
 
   <!-- Win95 title bar buttons -->
   <!-- Minimize -->
@@ -166,18 +169,21 @@ function generateSvg(text: string, sig: string): string {
 
   <!-- Footer status bar (Win95 style sunken panels) -->
   <rect x="${BORDER}" y="${HEIGHT - BORDER - FOOTER_H}" width="${WIDTH - BORDER * 2}" height="${FOOTER_H}" fill="${WIN_GRAY}"/>
-  <!-- Left panel (inset) -->
-  <rect x="${BORDER + 2}" y="${HEIGHT - BORDER - FOOTER_H + 4}" width="${WIDTH - BORDER * 2 - 120}" height="${FOOTER_H - 8}" fill="${WIN_DARK}"/>
-  <rect x="${BORDER + 3}" y="${HEIGHT - BORDER - FOOTER_H + 5}" width="${WIDTH - BORDER * 2 - 122}" height="${FOOTER_H - 10}" fill="${WIN_LIGHT}"/>
-  <rect x="${BORDER + 3}" y="${HEIGHT - BORDER - FOOTER_H + 5}" width="${WIDTH - BORDER * 2 - 123}" height="${FOOTER_H - 11}" fill="#f0f0f0"/>
-  <text x="${BORDER + 10}" y="${HEIGHT - BORDER - 11}" font-family="DejaVu Sans Mono, monospace" font-size="12" fill="#000">inscribed on solana via iqlabs • gateway.iqlabs.dev</text>
+  <!-- Left panel (inset) — text -->
+  <rect x="${BORDER + 2}" y="${HEIGHT - BORDER - FOOTER_H + 4}" width="${WIDTH - BORDER * 2 - 260}" height="${FOOTER_H - 8}" fill="${WIN_DARK}"/>
+  <rect x="${BORDER + 3}" y="${HEIGHT - BORDER - FOOTER_H + 5}" width="${WIDTH - BORDER * 2 - 262}" height="${FOOTER_H - 10}" fill="${WIN_LIGHT}"/>
+  <rect x="${BORDER + 3}" y="${HEIGHT - BORDER - FOOTER_H + 5}" width="${WIDTH - BORDER * 2 - 263}" height="${FOOTER_H - 11}" fill="#f0f0f0"/>
+  <text x="${BORDER + 10}" y="${HEIGHT - BORDER - 11}" font-family="DejaVu Sans Mono, monospace" font-size="12" fill="#000">inscribed on solana via iqlabs</text>
 
-  <!-- Right panel (inset) -->
-  <rect x="${WIDTH - BORDER - 114}" y="${HEIGHT - BORDER - FOOTER_H + 4}" width="110" height="${FOOTER_H - 8}" fill="${WIN_DARK}"/>
-  <rect x="${WIDTH - BORDER - 113}" y="${HEIGHT - BORDER - FOOTER_H + 5}" width="108" height="${FOOTER_H - 10}" fill="${WIN_LIGHT}"/>
-  <rect x="${WIDTH - BORDER - 113}" y="${HEIGHT - BORDER - FOOTER_H + 5}" width="107" height="${FOOTER_H - 11}" fill="#f0f0f0"/>
-  <rect x="${WIDTH - BORDER - 106}" y="${HEIGHT - BORDER - 20}" width="8" height="8" fill="${IQ_GREEN}"/>
-  <text x="${WIDTH - BORDER - 94}" y="${HEIGHT - BORDER - 11}" font-family="DejaVu Sans Mono, monospace" font-size="12" font-weight="bold" fill="${IQ_GREEN_DARK}">ON-CHAIN</text>
+  <!-- Middle panel (inset) — ON-CHAIN -->
+  <rect x="${WIDTH - BORDER - 254}" y="${HEIGHT - BORDER - FOOTER_H + 4}" width="110" height="${FOOTER_H - 8}" fill="${WIN_DARK}"/>
+  <rect x="${WIDTH - BORDER - 253}" y="${HEIGHT - BORDER - FOOTER_H + 5}" width="108" height="${FOOTER_H - 10}" fill="${WIN_LIGHT}"/>
+  <rect x="${WIDTH - BORDER - 253}" y="${HEIGHT - BORDER - FOOTER_H + 5}" width="107" height="${FOOTER_H - 11}" fill="#f0f0f0"/>
+  <rect x="${WIDTH - BORDER - 246}" y="${HEIGHT - BORDER - 20}" width="8" height="8" fill="${IQ_GREEN}"/>
+  <text x="${WIDTH - BORDER - 234}" y="${HEIGHT - BORDER - 11}" font-family="DejaVu Sans Mono, monospace" font-size="12" font-weight="bold" fill="${IQ_GREEN_DARK}">ON-CHAIN</text>
+
+  <!-- Right — Solana Internet logo -->
+  <image href="./public/solana-internet.png" x="${WIDTH - BORDER - 138}" y="${HEIGHT - BORDER - FOOTER_H - 20}" width="136" height="72"/>
 </svg>`;
 }
 
