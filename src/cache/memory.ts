@@ -69,5 +69,5 @@ export const TTL = {
   META_IMMUTABLE: 24 * 60 * 60 * 1000,  // 24 hours for immutable
   IMAGE: 24 * 60 * 60 * 1000,           // 24 hours for images
   ROWS: 5 * 60 * 1000,                  // 5 minutes for table rows
-  USER_STATE: 10 * 60 * 1000,           // 10 minutes for user state/profiles
+  USER_STATE: 2 * 60 * 1000,            // 2 minutes for user state/profiles
 } as const;
