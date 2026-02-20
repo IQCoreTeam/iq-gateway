@@ -6,6 +6,7 @@ RUN bun install
 
 COPY src ./src
 COPY fonts ./fonts
+COPY public ./public
 
 ENV NODE_ENV=production
 EXPOSE 3000
