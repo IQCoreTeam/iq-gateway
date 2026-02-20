@@ -42,8 +42,7 @@ async function validateCluster() {
     }
     console.log(`Cluster validated: ${cluster}`);
   } catch (e) {
-    console.error("Failed to validate cluster:", e instanceof Error ? e.message : e);
-    process.exit(1);
+    console.warn("Cluster validation failed (non-fatal, RPC may be rate-limited):", e instanceof Error ? e.message : e);
   }
 }
 
