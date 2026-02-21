@@ -11,7 +11,8 @@ const rowsCache = new MemoryCache<string>(100);
 const indexCache = new MemoryCache<string>(50);
 const sliceCache = new MemoryCache<string>(500);
 
-// In-flight request deduplication — prevents thundering herd on cache miss
+// ─── Inflight dedup ──────────────────────────────────────────────────────────
+
 const inflight = new Map<string, Promise<string>>();
 
 function isValidPublicKey(key: string): boolean {
@@ -30,13 +31,35 @@ function cacheKey(...parts: string[]): string {
 function deduped(key: string, fn: () => Promise<string>): Promise<string> {
   const existing = inflight.get(key);
   if (existing) return existing;
-
   const promise = fn().finally(() => inflight.delete(key));
   inflight.set(key, promise);
   return promise;
 }
 
-// ─── Existing: /table/:tablePda/rows ───────────────────────────────────────────
+// ─── Throttled background refresh ────────────────────────────────────────────
+// Only allow one background refresh per key per interval.
+// Prevents thundering herd when many clients poll the same head page.
+
+const lastRefresh = new Map<string, number>();
+const REFRESH_INTERVAL = 15_000; // Min 15s between background refreshes per key
+
+function shouldRefresh(key: string): boolean {
+  const now = Date.now();
+  const last = lastRefresh.get(key) || 0;
+  if (now - last < REFRESH_INTERVAL) return false;
+  lastRefresh.set(key, now);
+  return true;
+}
+
+// Periodic cleanup of stale refresh timestamps (every 5 min)
+setInterval(() => {
+  const cutoff = Date.now() - REFRESH_INTERVAL * 4;
+  for (const [k, t] of lastRefresh) {
+    if (t < cutoff) lastRefresh.delete(k);
+  }
+}, 5 * 60 * 1000);
+
+// ─── /table/:tablePda/rows ───────────────────────────────────────────────────
 
 function buildRowsResponse(tablePda: string, rows: Record<string, unknown>[], limit: number, before?: string) {
   return {
@@ -49,6 +72,8 @@ function buildRowsResponse(tablePda: string, rows: Record<string, unknown>[], li
   };
 }
 
+const HEAD_TTL = 15_000; // 15s memory TTL for head page
+
 tableRouter.get("/:tablePda/rows", async (c) => {
   const tablePda = c.req.param("tablePda");
   const limit = Math.min(Number(c.req.query("limit")) || 50, 100);
@@ -60,8 +85,8 @@ tableRouter.get("/:tablePda/rows", async (c) => {
   }
 
   const key = cacheKey(tablePda, String(limit), before || "");
-  const isHead = !before; // Head page = latest messages, needs background refresh
-  const ttl = isHead ? 10_000 : TTL.ROWS; // 10s memory for latest, 5min for older
+  const isHead = !before;
+  const ttl = isHead ? HEAD_TTL : TTL.ROWS;
 
   async function fetchRows(): Promise<string> {
     const rows = await readTableRows(tablePda, { limit, before });
@@ -72,19 +97,22 @@ tableRouter.get("/:tablePda/rows", async (c) => {
   }
 
   if (!fresh) {
+    // Memory cache hit
     const mem = rowsCache.get(key);
     if (mem) {
-      // Head page: always kick off background refresh so next poll gets fresh data
-      if (isHead) deduped(key, fetchRows).catch(() => {});
+      // Head page: throttled background refresh (max once per 15s per key)
+      if (isHead && shouldRefresh(key)) {
+        deduped(key, fetchRows).catch(() => {});
+      }
       return c.json({ ...JSON.parse(mem), cached: true });
     }
 
+    // Disk cache hit — serve immediately, no background refresh
+    // (memory cache will expire, triggering a fresh fetch next time)
     const disk = await getDiskCache("rows", key);
     if (disk) {
       const json = disk.toString("utf8");
       rowsCache.set(key, json, ttl);
-      // Always refresh in background — serves stale instantly, updates for next request
-      deduped(key, fetchRows).catch(() => {});
       return c.json({ ...JSON.parse(json), cached: true });
     }
   }
@@ -102,12 +130,9 @@ tableRouter.get("/:tablePda/rows", async (c) => {
   }
 });
 
-// ─── New: /table/:tablePda/index ───────────────────────────────────────────────
-// Returns the full signature list for a table (newest-first).
-// Lightweight — only fetches signature metadata, no transaction decoding.
-// Cache: 2 minutes in memory, disk stale-while-revalidate.
+// ─── /table/:tablePda/index ──────────────────────────────────────────────────
 
-const INDEX_TTL = 2 * 60 * 1000; // 2 minutes — sig list changes when new messages arrive
+const INDEX_TTL = 2 * 60 * 1000; // 2 min
 const INDEX_MAX_SIGS = 10000;
 
 tableRouter.get("/:tablePda/index", async (c) => {
@@ -131,12 +156,12 @@ tableRouter.get("/:tablePda/index", async (c) => {
   const mem = indexCache.get(key);
   if (mem) return c.json({ ...JSON.parse(mem), cached: true });
 
-  // Disk cache — serve stale, refresh in background
+  // Disk cache — serve stale, NO background refresh
+  // Memory TTL handles staleness; next miss after 2 min triggers fresh fetch
   const disk = await getDiskCache("rows", key);
   if (disk) {
     const json = disk.toString("utf8");
     indexCache.set(key, json, INDEX_TTL);
-    deduped(key, fetchIndex).catch(() => {});
     return c.json({ ...JSON.parse(json), cached: true });
   }
 
@@ -153,14 +178,10 @@ tableRouter.get("/:tablePda/index", async (c) => {
   }
 });
 
-// ─── New: /table/:tablePda/slice ───────────────────────────────────────────────
-// Decodes specific transactions by signature.
-// Query: ?sigs=sig1,sig2,...  (max 50 per request)
-// Cache: individual rows cached for 1 hour (on-chain data is immutable).
-// The full slice response is also cached briefly to handle repeated requests.
+// ─── /table/:tablePda/slice ──────────────────────────────────────────────────
 
 const SLICE_MAX = 50;
-const SLICE_ROW_TTL = 24 * 60 * 60 * 1000; // 24 hours — on-chain rows are immutable
+const SLICE_ROW_TTL = 24 * 60 * 60 * 1000; // 24h — on-chain rows are immutable
 
 tableRouter.get("/:tablePda/slice", async (c) => {
   const tablePda = c.req.param("tablePda");
@@ -184,12 +205,10 @@ tableRouter.get("/:tablePda/slice", async (c) => {
 
   const key = cacheKey("slice", tablePda, ...sigs);
 
-  // Check for cached individual rows first, only fetch missing ones
   async function fetchSlice(): Promise<string> {
     const rows: Array<Record<string, unknown>> = [];
     const uncached: string[] = [];
 
-    // Gather cached rows (memory → disk), collect uncached sigs
     for (const sig of sigs) {
       const rowKey = cacheKey("row", sig);
       const mem = sliceCache.get(rowKey);
@@ -207,11 +226,8 @@ tableRouter.get("/:tablePda/slice", async (c) => {
       uncached.push(sig);
     }
 
-    // Fetch uncached rows from chain
     if (uncached.length > 0) {
       const freshRows = await readRowsBySignatures(uncached);
-
-      // Cache each row individually by its signature
       const freshMap = new Map<string, Record<string, unknown>>();
       for (const row of freshRows) {
         const sig = (row as { __txSignature?: string }).__txSignature;
@@ -223,15 +239,12 @@ tableRouter.get("/:tablePda/slice", async (c) => {
           setDiskCache("rows", rowKey, rowJson).catch(() => {});
         }
       }
-
-      // Merge in order of the original sigs array
       for (const sig of uncached) {
         const row = freshMap.get(sig);
         if (row) rows.push(row);
       }
     }
 
-    // Re-sort to match original sigs order
     const sigOrder = new Map(sigs.map((s, i) => [s, i]));
     rows.sort((a, b) => {
       const aIdx = sigOrder.get((a as { __txSignature?: string }).__txSignature || "") ?? 999;
@@ -239,8 +252,7 @@ tableRouter.get("/:tablePda/slice", async (c) => {
       return aIdx - bIdx;
     });
 
-    const json = JSON.stringify({ tablePda, rows, count: rows.length });
-    return json;
+    return JSON.stringify({ tablePda, rows, count: rows.length });
   }
 
   try {
@@ -253,14 +265,15 @@ tableRouter.get("/:tablePda/slice", async (c) => {
   }
 });
 
-// ─── Cache stats ───────────────────────────────────────────────────────────────
+// ─── Cache stats ─────────────────────────────────────────────────────────────
 
 tableRouter.get("/cache/stats", (c) => {
   return c.json({
-    rows: { entries: rowsCache.size(), ttl: TTL.ROWS },
+    rows: { entries: rowsCache.size(), ttl: HEAD_TTL },
     index: { entries: indexCache.size(), ttl: INDEX_TTL },
     slice: { entries: sliceCache.size(), ttl: SLICE_ROW_TTL },
     inflight: inflight.size,
+    refreshThrottles: lastRefresh.size,
   });
 });
 

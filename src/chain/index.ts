@@ -1,1 +1,1 @@
-export { readAsset, listUserAssets, listUserSessions, readUserState, readTableRows, fetchSignatureIndex, readRowsBySignatures, generateETag, decodeAssetData, detectImageType } from "./reader";
+export { readAsset, listUserAssets, listUserSessions, readUserState, readTableRows, fetchSignatureIndex, readRowsBySignatures, generateETag, decodeAssetData, detectImageType, getRpcMetrics } from "./reader";

@@ -1,6 +1,8 @@
 import { Hono } from "hono";
-import { metaCache, imageCache, getStats } from "../cache";
-import { rowsCache, inflight } from "./table";
+import { metaCache, imageCache, userStateCache } from "../cache/memory";
+import { getStats } from "../cache/store";
+import { getRpcMetrics } from "../chain";
+import { rowsCache, indexCache, sliceCache, inflight } from "./table";
 
 export const healthRouter = new Hono();
 
@@ -21,11 +23,15 @@ healthRouter.get("/health", async (c) => {
   return c.json({
     status: "ok",
     uptime: Math.floor((Date.now() - START_TIME) / 1000),
+    rpc: getRpcMetrics(),
     cache: {
       memory: {
         meta: metaCache.size(),
         images: imageCache.size(),
+        userState: userStateCache.size(),
         tableRows: rowsCache.size(),
+        tableIndex: indexCache.size(),
+        tableSlice: sliceCache.size(),
         inflightReads: inflight.size,
       },
       disk: {
