@@ -125,6 +125,13 @@ curl http://localhost:3000/img/YOUR_TX_SIG.png
 | `GET /meta/{sig}.json` | Metaplex-compatible JSON metadata |
 | `GET /img/{sig}.png` | Raw image/file bytes |
 | `GET /user/{pubkey}/assets` | List assets uploaded by a wallet |
+| `GET /view/{sig}` | Rendered HTML view of text inscriptions |
+| `GET /render/{sig}` | PNG/SVG image render of text inscriptions |
+| `GET /table/{tablePda}/rows` | Read table rows with pagination |
+| `GET /table/{tablePda}/index` | Get signature index for a table |
+| `GET /table/{tablePda}/slice` | Read specific rows by signature |
+| `GET /table/cache/stats` | Cache statistics |
+| `GET /version` | Server version info |
 
 ## Run Your Own Gateway
 

@@ -14,7 +14,7 @@
         "@solana/web3.js": "^1.98.0",
         "dotenv": "^17.2.3",
         "hono": "^4.6.0",
-        "iqlabs-sdk": "npm:@iqlabs-official/solana-sdk@^0.1.5",
+        "iqlabs-sdk": "npm:@iqlabs-official/solana-sdk@^0.1.7",
       },
       "devDependencies": {
         "@types/bun": "latest",
@@ -195,7 +195,7 @@
 
     "ieee754": ["ieee754@1.2.1", "", {}, "sha512-dcyqhDvX1C46lXZcVqCpK+FtMRQVdIMN6/Df5js2zouUsqG7I6sFxitIC+7KYK29KdXOLHdu9zL4sFnoVQnqaA=="],
 
-    "iqlabs-sdk": ["@iqlabs-official/solana-sdk@0.1.5", "", { "dependencies": { "@coral-xyz/anchor": "^0.32.1", "@noble/hashes": "^1.8.0", "@solana/web3.js": "^1.98.0" } }, "sha512-pxCpixD1J0qYwsdNUStWBlauIkA8owrQMB9Nr2jYxtCLXSUtrsy7hXnhIHQLVmbwRhpJmboyhaIJOSRik12c7g=="],
+    "iqlabs-sdk": ["@iqlabs-official/solana-sdk@0.1.7", "", { "dependencies": { "@coral-xyz/anchor": "^0.32.1", "@noble/hashes": "^1.8.0", "@solana/web3.js": "^1.98.0" } }, "sha512-jrWiunhTd8S/VDvVzPzfHi/Md1zpz6Unuq/7gnMZU2MENxo5PNU05Gl6SODoNZTUiclVQfJjXHm5YGu6u9745A=="],
 
     "isomorphic-ws": ["isomorphic-ws@4.0.1", "", { "peerDependencies": { "ws": "*" } }, "sha512-BhBvN2MBpWTaSHdWRb/bwdZJ1WaehQ2L1KngkCkfLUGF0mAWAT1sQUQacEmQ0jXkFw/czDXPNQSL5u2/Krsz1w=="],
 
