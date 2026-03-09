@@ -1,4 +1,4 @@
-import { PublicKey } from "@solana/web3.js";
+import { Connection, PublicKey } from "@solana/web3.js";
 import iqlabs from "iqlabs-sdk";
 import { createHash } from "node:crypto";
 
@@ -6,6 +6,7 @@ const PRIMARY_RPC = process.env.SOLANA_RPC_ENDPOINT || "https://mainnet.helius-r
 const FALLBACK_RPC = "https://api.mainnet-beta.solana.com";
 
 iqlabs.setRpcUrl(PRIMARY_RPC);
+const solConnection = new Connection(PRIMARY_RPC);
 
 // ─── Global RPC rate limiter ─────────────────────────────────────────────────
 // Token bucket: limits total RPC calls across all endpoints.
@@ -153,6 +154,47 @@ export async function readTableRows(
 ): Promise<Array<Record<string, unknown>>> {
   const { limit = 50, before, speed = "medium" } = options;
   return withRetry(() => iqlabs.reader.readTableRows(tablePda, { limit, before, speed }));
+}
+
+// Lightweight: only fetches the signature list (1 RPC call), no row data
+export async function fetchRecentSignatures(
+  tablePda: string,
+  limit = 50,
+  before?: string,
+): Promise<string[]> {
+  return withRetry(async () => {
+    const pk = new PublicKey(tablePda);
+    const opts: { limit: number; before?: string } = { limit };
+    if (before) opts.before = before;
+    const sigs = await solConnection.getSignaturesForAddress(pk, opts);
+    return sigs.map((s: { signature: string }) => s.signature);
+  });
+}
+
+// Read a single row by transaction signature.
+// Returns null for non-row transactions (e.g. table creation).
+export async function readSingleRow(sig: string): Promise<Record<string, unknown> | null> {
+  return withRetry(async () => {
+    let result;
+    try {
+      result = await iqlabs.reader.readCodeIn(sig);
+    } catch (err) {
+      // Skip transactions that aren't data rows (table creation, etc.)
+      if (err instanceof Error && err.message.includes("instruction not found")) {
+        return null;
+      }
+      throw err;
+    }
+    const { data, metadata } = result;
+    if (!data) return { signature: sig, metadata, data: null };
+    try {
+      const parsed = JSON.parse(data);
+      if (parsed && typeof parsed === "object" && !Array.isArray(parsed)) {
+        return { ...parsed, __txSignature: sig };
+      }
+    } catch {}
+    return { signature: sig, metadata, data };
+  });
 }
 
 export async function fetchSignatureIndex(

@@ -1,15 +1,15 @@
 import { Hono } from "hono";
 import { PublicKey } from "@solana/web3.js";
 import { createHash } from "node:crypto";
-import { readTableRows, fetchSignatureIndex, readRowsBySignatures } from "../chain";
+import { fetchSignatureIndex, readRowsBySignatures, fetchRecentSignatures, readSingleRow } from "../chain";
 import { MemoryCache, TTL } from "../cache/memory";
 import { getDiskCache, setDiskCache } from "../cache/disk";
 
 export const tableRouter = new Hono();
 
-const rowsCache = new MemoryCache<string>(100);
+const rowsCache = new MemoryCache<string>(500);
 const indexCache = new MemoryCache<string>(50);
-const sliceCache = new MemoryCache<string>(500);
+const sliceCache = new MemoryCache<string>(2000);
 
 // ─── Inflight dedup ──────────────────────────────────────────────────────────
 
@@ -41,7 +41,7 @@ function deduped(key: string, fn: () => Promise<string>): Promise<string> {
 // Prevents thundering herd when many clients poll the same head page.
 
 const lastRefresh = new Map<string, number>();
-const REFRESH_INTERVAL = 15_000; // Min 15s between background refreshes per key
+const REFRESH_INTERVAL = 30_000; // Min 30s between background refreshes per key
 
 function shouldRefresh(key: string): boolean {
   const now = Date.now();
@@ -72,7 +72,8 @@ function buildRowsResponse(tablePda: string, rows: Record<string, unknown>[], li
   };
 }
 
-const HEAD_TTL = 15_000; // 15s memory TTL for head page
+const HEAD_TTL = 60_000; // 60s memory TTL for head page
+const SLICE_ROW_TTL = 24 * 60 * 60 * 1000; // 24h — on-chain rows are immutable
 
 tableRouter.get("/:tablePda/rows", async (c) => {
   const tablePda = c.req.param("tablePda");
@@ -89,7 +90,57 @@ tableRouter.get("/:tablePda/rows", async (c) => {
   const ttl = isHead ? HEAD_TTL : TTL.ROWS;
 
   async function fetchRows(): Promise<string> {
-    const rows = await readTableRows(tablePda, { limit, before });
+    // Phase 1: lightweight sig scan (1 RPC call)
+    const signatures = await fetchRecentSignatures(tablePda, limit, before);
+
+    // Phase 2: resolve rows — check per-sig 24h cache first, only fetch uncached
+    const rows: Record<string, unknown>[] = [];
+    const uncached: string[] = [];
+
+    for (const sig of signatures) {
+      const rowKey = cacheKey("row", sig);
+      const mem = sliceCache.get(rowKey);
+      if (mem) {
+        if (mem !== "null") rows.push(JSON.parse(mem));
+        continue;
+      }
+      const disk = await getDiskCache("rows", rowKey);
+      if (disk) {
+        const json = disk.toString("utf8");
+        sliceCache.set(rowKey, json, SLICE_ROW_TTL);
+        if (json !== "null") rows.push(JSON.parse(json));
+        continue;
+      }
+      uncached.push(sig);
+    }
+
+    // Phase 3: fetch only truly new rows from RPC
+    if (uncached.length > 0) {
+      for (const sig of uncached) {
+        const row = await readSingleRow(sig);
+        const rowKey = cacheKey("row", sig);
+        if (row) {
+          const txSig = (row as { __txSignature?: string }).__txSignature || sig;
+          const rowJson = JSON.stringify(row);
+          const rk = cacheKey("row", txSig);
+          sliceCache.set(rk, rowJson, SLICE_ROW_TTL);
+          setDiskCache("rows", rk, rowJson).catch(() => {});
+          rows.push(row);
+        } else {
+          // Cache non-row sigs (table creation etc.) so we don't re-fetch them
+          sliceCache.set(rowKey, "null", SLICE_ROW_TTL);
+        }
+      }
+    }
+
+    // Maintain signature order
+    const sigOrder = new Map(signatures.map((s, i) => [s, i]));
+    rows.sort((a, b) => {
+      const aIdx = sigOrder.get((a as { __txSignature?: string }).__txSignature || "") ?? 999;
+      const bIdx = sigOrder.get((b as { __txSignature?: string }).__txSignature || "") ?? 999;
+      return aIdx - bIdx;
+    });
+
     const json = JSON.stringify(buildRowsResponse(tablePda, rows, limit, before));
     rowsCache.set(key, json, ttl);
     setDiskCache("rows", key, json).catch(() => {});
@@ -100,7 +151,7 @@ tableRouter.get("/:tablePda/rows", async (c) => {
     // Memory cache hit
     const mem = rowsCache.get(key);
     if (mem) {
-      // Head page: throttled background refresh (max once per 15s per key)
+      // Head page: throttled background refresh (max once per 30s per key)
       if (isHead && shouldRefresh(key)) {
         deduped(key, fetchRows).catch(() => {});
       }
@@ -124,6 +175,14 @@ tableRouter.get("/:tablePda/rows", async (c) => {
     const message = e instanceof Error ? e.message : "unknown error";
     if (message.includes("not found") || message.includes("Invalid public key")) {
       return c.json({ error: "table not found", tablePda }, 404);
+    }
+    // Serve stale disk cache on RPC failure instead of 500
+    const stale = await getDiskCache("rows", key);
+    if (stale) {
+      const json = stale.toString("utf8");
+      rowsCache.set(key, json, ttl);
+      console.warn(`[table] RPC failed for ${tablePda}, serving stale cache`);
+      return c.json({ ...JSON.parse(json), cached: true });
     }
     console.error(`[table] failed to read ${tablePda}:`, message);
     return c.json({ error: "failed to read table" }, 500);
@@ -181,7 +240,6 @@ tableRouter.get("/:tablePda/index", async (c) => {
 // ─── /table/:tablePda/slice ──────────────────────────────────────────────────
 
 const SLICE_MAX = 50;
-const SLICE_ROW_TTL = 24 * 60 * 60 * 1000; // 24h — on-chain rows are immutable
 
 tableRouter.get("/:tablePda/slice", async (c) => {
   const tablePda = c.req.param("tablePda");
@@ -213,14 +271,14 @@ tableRouter.get("/:tablePda/slice", async (c) => {
       const rowKey = cacheKey("row", sig);
       const mem = sliceCache.get(rowKey);
       if (mem) {
-        rows.push(JSON.parse(mem));
+        if (mem !== "null") rows.push(JSON.parse(mem));
         continue;
       }
       const disk = await getDiskCache("rows", rowKey);
       if (disk) {
         const json = disk.toString("utf8");
         sliceCache.set(rowKey, json, SLICE_ROW_TTL);
-        rows.push(JSON.parse(json));
+        if (json !== "null") rows.push(JSON.parse(json));
         continue;
       }
       uncached.push(sig);
