@@ -2,11 +2,12 @@ import { Connection, PublicKey } from "@solana/web3.js";
 import iqlabs from "iqlabs-sdk";
 import { createHash } from "node:crypto";
 
-const PRIMARY_RPC = process.env.SOLANA_RPC_ENDPOINT || "https://mainnet.helius-rpc.com/?api-key=a0b8ead5-9dc8-4926-b537-9a4b32439f2f";
+const PRIMARY_RPC = process.env.SOLANA_RPC_ENDPOINT || "https://api.mainnet-beta.solana.com";
 const FALLBACK_RPC = "https://api.mainnet-beta.solana.com";
 
 iqlabs.setRpcUrl(PRIMARY_RPC);
-const solConnection = new Connection(PRIMARY_RPC);
+let activeRpc = PRIMARY_RPC;
+let solConnection = new Connection(PRIMARY_RPC);
 
 // ─── Global RPC rate limiter ─────────────────────────────────────────────────
 // Token bucket: limits total RPC calls across all endpoints.
@@ -80,17 +81,18 @@ async function withRetry<T>(fn: () => Promise<T>, maxRetries = 2): Promise<T> {
       }
 
       // Connection errors — try fallback RPC once
-      if (i === 0 && (msg.includes("fetch failed") || msg.includes("ECONNREFUSED") || msg.includes("503"))) {
+      if (i === 0 && (msg.includes("fetch failed") || msg.includes("ECONNREFUSED") || msg.includes("503") || msg.includes("max usage reached"))) {
         metrics.fallbacks++;
         console.warn(`[reader] Primary RPC failed (${msg}), trying fallback`);
         iqlabs.setRpcUrl(FALLBACK_RPC);
+        activeRpc = FALLBACK_RPC;
+        solConnection = new Connection(FALLBACK_RPC);
         try {
           return await fn();
-        } catch {
-          iqlabs.setRpcUrl(PRIMARY_RPC);
-          throw e;
         } finally {
           iqlabs.setRpcUrl(PRIMARY_RPC);
+          activeRpc = PRIMARY_RPC;
+          solConnection = new Connection(PRIMARY_RPC);
         }
       }
 
@@ -102,12 +104,6 @@ async function withRetry<T>(fn: () => Promise<T>, maxRetries = 2): Promise<T> {
 }
 
 // ─── Public API ──────────────────────────────────────────────────────────────
-
-type TableRowOptions = {
-  limit?: number;
-  before?: string;
-  speed?: string;
-};
 
 export function generateETag(content: string | Buffer): string {
   return `"${createHash("sha256").update(content).digest("hex").slice(0, 16)}"`;
@@ -146,14 +142,6 @@ export async function listUserSessions(userPubkey: string) {
 
 export async function readUserState(userPubkey: string) {
   return withRetry(() => iqlabs.reader.readUserState(userPubkey));
-}
-
-export async function readTableRows(
-  tablePda: string,
-  options: TableRowOptions = {}
-): Promise<Array<Record<string, unknown>>> {
-  const { limit = 50, before, speed = "medium" } = options;
-  return withRetry(() => iqlabs.reader.readTableRows(tablePda, { limit, before, speed }));
 }
 
 // Lightweight: only fetches the signature list (1 RPC call), no row data

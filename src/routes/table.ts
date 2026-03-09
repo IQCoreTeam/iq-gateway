@@ -2,16 +2,13 @@ import { Hono } from "hono";
 import { PublicKey } from "@solana/web3.js";
 import { createHash } from "node:crypto";
 import { fetchSignatureIndex, readRowsBySignatures, fetchRecentSignatures, readSingleRow } from "../chain";
-import { MemoryCache, TTL } from "../cache/memory";
-import { getDiskCache, setDiskCache } from "../cache/disk";
+import { MemoryCache, TTL, getDiskCache, setDiskCache, deduped } from "../cache";
 
 export const tableRouter = new Hono();
 
 const rowsCache = new MemoryCache<string>(500);
 const indexCache = new MemoryCache<string>(50);
 const sliceCache = new MemoryCache<string>(2000);
-
-// ─── Inflight dedup ──────────────────────────────────────────────────────────
 
 const inflight = new Map<string, Promise<string>>();
 
@@ -26,14 +23,6 @@ function isValidPublicKey(key: string): boolean {
 
 function cacheKey(...parts: string[]): string {
   return createHash("sha256").update(parts.join(":")).digest("hex").slice(0, 24);
-}
-
-function deduped(key: string, fn: () => Promise<string>): Promise<string> {
-  const existing = inflight.get(key);
-  if (existing) return existing;
-  const promise = fn().finally(() => inflight.delete(key));
-  inflight.set(key, promise);
-  return promise;
 }
 
 // ─── Throttled background refresh ────────────────────────────────────────────
@@ -153,7 +142,7 @@ tableRouter.get("/:tablePda/rows", async (c) => {
     if (mem) {
       // Head page: throttled background refresh (max once per 30s per key)
       if (isHead && shouldRefresh(key)) {
-        deduped(key, fetchRows).catch(() => {});
+        deduped(inflight, key, fetchRows).catch(() => {});
       }
       return c.json({ ...JSON.parse(mem), cached: true });
     }
@@ -169,7 +158,7 @@ tableRouter.get("/:tablePda/rows", async (c) => {
   }
 
   try {
-    const json = await deduped(key, fetchRows);
+    const json = await deduped(inflight, key, fetchRows);
     return c.json({ ...JSON.parse(json), cached: false });
   } catch (e) {
     const message = e instanceof Error ? e.message : "unknown error";
@@ -225,7 +214,7 @@ tableRouter.get("/:tablePda/index", async (c) => {
   }
 
   try {
-    const json = await deduped(key, fetchIndex);
+    const json = await deduped(inflight, key, fetchIndex);
     return c.json({ ...JSON.parse(json), cached: false });
   } catch (e) {
     const message = e instanceof Error ? e.message : "unknown error";
@@ -314,7 +303,7 @@ tableRouter.get("/:tablePda/slice", async (c) => {
   }
 
   try {
-    const json = await deduped(key, fetchSlice);
+    const json = await deduped(inflight, key, fetchSlice);
     return c.json({ ...JSON.parse(json), cached: false });
   } catch (e) {
     const message = e instanceof Error ? e.message : "unknown error";

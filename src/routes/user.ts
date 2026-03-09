@@ -1,7 +1,6 @@
 import { Hono } from "hono";
 import { listUserAssets, listUserSessions, readUserState } from "../chain";
-import { MemoryCache, userStateCache, TTL } from "../cache/memory";
-import { getDiskCache, setDiskCache } from "../cache/disk";
+import { MemoryCache, userStateCache, TTL, getDiskCache, setDiskCache, deduped } from "../cache";
 
 export const userRouter = new Hono();
 
@@ -13,17 +12,7 @@ const sessionsCache = new MemoryCache<string>(200);
 const ASSETS_TTL = 2 * 60 * 1000;   // 2 min — inventory changes on new uploads
 const SESSIONS_TTL = 5 * 60 * 1000; // 5 min — sessions rarely change
 
-// ─── Inflight dedup ──────────────────────────────────────────────────────────
-
 const inflight = new Map<string, Promise<string>>();
-
-function deduped(key: string, fn: () => Promise<string>): Promise<string> {
-  const existing = inflight.get(key);
-  if (existing) return existing;
-  const promise = fn().finally(() => inflight.delete(key));
-  inflight.set(key, promise);
-  return promise;
-}
 
 // ─── GET /user/:pubkey/assets ────────────────────────────────────────────────
 
@@ -47,7 +36,7 @@ userRouter.get("/:pubkey/assets", async (c) => {
 
   // Fetch from chain (deduplicated)
   try {
-    const json = await deduped(cacheKey, async () => {
+    const json = await deduped(inflight, cacheKey, async () => {
       const assets = await listUserAssets(pubkey, limit, before || undefined);
       return JSON.stringify(assets);
     });
@@ -79,7 +68,7 @@ userRouter.get("/:pubkey/sessions", async (c) => {
 
   // Fetch from chain (deduplicated)
   try {
-    const json = await deduped(cacheKey, async () => {
+    const json = await deduped(inflight, cacheKey, async () => {
       const sessions = await listUserSessions(pubkey);
       return JSON.stringify({ sessions });
     });
@@ -111,7 +100,7 @@ userRouter.get("/:pubkey/state", async (c) => {
 
   // Fetch from chain (deduplicated)
   try {
-    const json = await deduped(cacheKey, async () => {
+    const json = await deduped(inflight, cacheKey, async () => {
       const state = await readUserState(pubkey);
       return JSON.stringify(state, (_k, v) => typeof v === "bigint" ? v.toString() : v);
     });

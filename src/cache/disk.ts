@@ -1,7 +1,7 @@
-import { mkdir, readFile, writeFile, unlink, stat } from "node:fs/promises";
+import { mkdir, readFile, writeFile } from "node:fs/promises";
 import { join } from "node:path";
 import { createHash } from "node:crypto";
-import { recordEntry, getEntry, removeEntry, touchEntry } from "./store";
+import { recordEntry, getEntry, removeEntry } from "./store";
 
 const CACHE_DIR = process.env.CACHE_DIR || "./cache";
 
@@ -50,9 +50,3 @@ export async function setDiskCache(
   }
 }
 
-export async function deleteDiskCache(
-  type: "meta" | "img" | "rows" | "user" | "render" | "view",
-  key: string
-): Promise<void> {
-  await removeEntry(`${type}:${key}`);
-}

@@ -4,8 +4,6 @@ import { imageCache, TTL, getDiskCache, setDiskCache } from "../cache";
 
 export const imgRouter = new Hono();
 
-const FETCH_TIMEOUT = 120_000; // 2 min for large files
-
 imgRouter.get("/:sig", async (c) => {
   let sig = c.req.param("sig");
   if (sig.endsWith(".png")) sig = sig.slice(0, -4);
@@ -26,12 +24,7 @@ imgRouter.get("/:sig", async (c) => {
 
   if (!buf) {
     try {
-      const controller = new AbortController();
-      const timeout = setTimeout(() => controller.abort(), FETCH_TIMEOUT);
-
       const { data } = await readAsset(sig);
-      clearTimeout(timeout);
-
       if (!data) return c.text("not found", 404);
 
       buf = decodeAssetData(data);
@@ -40,7 +33,6 @@ imgRouter.get("/:sig", async (c) => {
       await setDiskCache("img", sig, buf);
     } catch (e: unknown) {
       const msg = e instanceof Error ? e.message : "unknown error";
-      if (msg.includes("abort")) return c.text("timeout - file too large", 504);
       console.error("img fetch error:", msg);
       return c.text("failed to fetch", 500);
     }

@@ -5,7 +5,7 @@ import { escapeMarkup } from "./render";
 
 export const viewRouter = new Hono();
 
-function renderHtmlPage(text: string, sig: string): string {
+function renderHtmlPage(text: string, sig: string, baseUrl: string): string {
   const shortSig = sig.slice(0, 8) + "..." + sig.slice(-8);
 
   let displayContent: string;
@@ -26,7 +26,7 @@ function renderHtmlPage(text: string, sig: string): string {
 <title>IQLabs — ${escapeMarkup(shortSig)}</title>
 <meta property="og:title" content="IQLabs Inscription"/>
 <meta property="og:description" content="${escapeMarkup(text.slice(0, 200))}"/>
-<meta property="og:image" content="https://gateway.iqlabs.dev/render/${sig}"/>
+<meta property="og:image" content="${baseUrl}/render/${sig}"/>
 <style>
 * { margin:0; padding:0; box-sizing:border-box; }
 
@@ -350,7 +350,11 @@ viewRouter.get("/:sig", async (c) => {
   }
 
   const text = buf.toString("utf-8");
-  const html = renderHtmlPage(text, sig);
+  const proto = c.req.header("X-Forwarded-Proto") || "https";
+  const host = c.req.header("Host") || "gateway.iqlabs.dev";
+  const basePath = process.env.BASE_PATH || "";
+  const baseUrl = `${proto}://${host}${basePath}`;
+  const html = renderHtmlPage(text, sig, baseUrl);
 
   const etag = generateETag(html);
   if (c.req.header("If-None-Match") === etag) return c.body(null, 304);

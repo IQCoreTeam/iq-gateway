@@ -52,7 +52,7 @@ export async function getTotalSize(): Promise<number> {
 
 export async function recordEntry(
   key: string,
-  type: "meta" | "img" | "rows" | "user",
+  type: "meta" | "img" | "rows" | "user" | "render" | "view",
   path: string,
   size: number
 ): Promise<void> {
