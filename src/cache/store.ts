@@ -29,6 +29,8 @@ async function getDb(): Promise<Database> {
   if (db) return db;
   await mkdir(CACHE_DIR, { recursive: true });
   db = new Database(DB_PATH);
+  db.run("PRAGMA journal_mode = WAL");
+  db.run("PRAGMA busy_timeout = 5000");
   db.run(`
     CREATE TABLE IF NOT EXISTS cache_entries (
       key TEXT PRIMARY KEY,
