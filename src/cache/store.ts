@@ -82,15 +82,18 @@ export async function removeEntry(key: string): Promise<void> {
   }
 }
 
-export async function getEntry(key: string): Promise<{ path: string; size: number } | null> {
+export async function getEntry(key: string, maxAgeMs?: number): Promise<{ path: string; size: number } | null> {
   const db = await getDb();
-  const entry = db.query<{ path: string; size: number }, [string]>(
-    "SELECT path, size FROM cache_entries WHERE key = ?"
+  const entry = db.query<{ path: string; size: number; created_at: number }, [string]>(
+    "SELECT path, size, created_at FROM cache_entries WHERE key = ?"
   ).get(key);
-  if (entry) {
-    await touchEntry(key);
+  if (!entry) return null;
+  if (maxAgeMs && Date.now() - entry.created_at > maxAgeMs) {
+    await removeEntry(key);
+    return null;
   }
-  return entry || null;
+  await touchEntry(key);
+  return entry;
 }
 
 async function pruneIfNeeded(): Promise<void> {

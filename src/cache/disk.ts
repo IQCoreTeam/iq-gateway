@@ -15,12 +15,18 @@ function hashKey(key: string): string {
   return createHash("sha256").update(key).digest("hex").slice(0, 16);
 }
 
+// Disk TTLs: user state and rows expire; images and immutable meta persist
+const DISK_TTL: Partial<Record<string, number>> = {
+  user: 2 * 60 * 1000,    // 2 minutes (same as memory)
+  rows: 5 * 60 * 1000,    // 5 minutes (same as memory)
+};
+
 export async function getDiskCache(
   type: "meta" | "img" | "rows" | "user" | "render" | "view",
   key: string
 ): Promise<Buffer | null> {
   try {
-    const entry = await getEntry(`${type}:${key}`);
+    const entry = await getEntry(`${type}:${key}`, DISK_TTL[type]);
     if (!entry) return null;
 
     const data = await readFile(entry.path);
