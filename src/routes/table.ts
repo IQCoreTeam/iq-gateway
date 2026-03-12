@@ -1,7 +1,7 @@
 import { Hono } from "hono";
 import { PublicKey } from "@solana/web3.js";
 import { createHash } from "node:crypto";
-import { fetchSignatureIndex, readRowsBySignatures, fetchRecentSignatures, readSingleRow } from "../chain";
+import { fetchSignatureIndex, readRowsBySignatures, fetchRecentSignatures, readSingleRow, readMultipleRows } from "../chain";
 import { MemoryCache, TTL, getDiskCache, setDiskCache, deduped } from "../cache";
 
 export const tableRouter = new Hono();
@@ -104,9 +104,11 @@ tableRouter.get("/:tablePda/rows", async (c) => {
     }
 
     // Phase 3: fetch only truly new rows from RPC
+    // Uses readMultipleRows which parallelizes via Helius when available
     if (uncached.length > 0) {
+      const fetched = await readMultipleRows(uncached);
       for (const sig of uncached) {
-        const row = await readSingleRow(sig);
+        const row = fetched.get(sig) ?? null;
         const rowKey = cacheKey("row", sig);
         if (row) {
           const txSig = (row as { __txSignature?: string }).__txSignature || sig;
