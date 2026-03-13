@@ -80,6 +80,42 @@ userRouter.get("/:pubkey/sessions", async (c) => {
   }
 });
 
+// ─── GET /user/:pubkey/profile ────────────────────────────────────────────────
+// Convenience route: returns parsed profile JSON (name, bio, encryptionPubKey, etc)
+
+userRouter.get("/:pubkey/profile", async (c) => {
+  const pubkey = c.req.param("pubkey");
+  const cacheKey = `profile:${pubkey}`;
+
+  const mem = userStateCache.get(cacheKey);
+  if (mem) return c.json(JSON.parse(mem));
+
+  const disk = await getDiskCache("user", cacheKey);
+  if (disk) {
+    const json = disk.toString("utf8");
+    userStateCache.set(cacheKey, json, TTL.USER_STATE);
+    return c.json(JSON.parse(json));
+  }
+
+  try {
+    const json = await deduped(inflight, cacheKey, async () => {
+      const state = await readUserState(pubkey);
+      if (!state?.profileData) return JSON.stringify({ pubkey });
+      try {
+        const profile = JSON.parse(state.profileData);
+        return JSON.stringify({ pubkey, ...profile });
+      } catch {
+        return JSON.stringify({ pubkey });
+      }
+    });
+    userStateCache.set(cacheKey, json, TTL.USER_STATE);
+    setDiskCache("user", cacheKey, json).catch(() => {});
+    return c.json(JSON.parse(json));
+  } catch {
+    return c.json({ pubkey }, 200);
+  }
+});
+
 // ─── GET /user/:pubkey/state ─────────────────────────────────────────────────
 
 userRouter.get("/:pubkey/state", async (c) => {
