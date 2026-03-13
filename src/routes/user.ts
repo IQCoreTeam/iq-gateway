@@ -1,5 +1,5 @@
 import { Hono } from "hono";
-import { listUserAssets, listUserSessions, readUserState } from "../chain";
+import { listUserAssets, listUserSessions, readUserState, fetchUserConnections } from "../chain";
 import { MemoryCache, userStateCache, TTL, getDiskCache, setDiskCache, deduped } from "../cache";
 
 export const userRouter = new Hono();
@@ -145,5 +145,37 @@ userRouter.get("/:pubkey/state", async (c) => {
     return c.json(JSON.parse(json));
   } catch {
     return c.json({ error: "failed to fetch state" }, 500);
+  }
+});
+
+// ─── GET /user/:pubkey/connections ──────────────────────────────────────────
+
+const connectionsCache = new MemoryCache<string>(200);
+const CONNECTIONS_TTL = 60 * 1000; // 1 min — connections change on friend requests
+
+userRouter.get("/:pubkey/connections", async (c) => {
+  const pubkey = c.req.param("pubkey");
+  const cacheKey = `connections:${pubkey}`;
+
+  const mem = connectionsCache.get(cacheKey);
+  if (mem) return c.json(JSON.parse(mem));
+
+  const disk = await getDiskCache("user", cacheKey);
+  if (disk) {
+    const json = disk.toString("utf8");
+    connectionsCache.set(cacheKey, json, CONNECTIONS_TTL);
+    return c.json(JSON.parse(json));
+  }
+
+  try {
+    const json = await deduped(inflight, cacheKey, async () => {
+      const connections = await fetchUserConnections(pubkey);
+      return JSON.stringify(connections);
+    });
+    connectionsCache.set(cacheKey, json, CONNECTIONS_TTL);
+    setDiskCache("user", cacheKey, json).catch(() => {});
+    return c.json(JSON.parse(json));
+  } catch {
+    return c.json({ error: "failed to fetch connections" }, 500);
   }
 });

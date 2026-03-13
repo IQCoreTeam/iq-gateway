@@ -160,6 +160,10 @@ export async function readUserState(userPubkey: string) {
   return withRetry(() => iqlabs.reader.readUserState(userPubkey));
 }
 
+export async function fetchUserConnections(userPubkey: string) {
+  return withRetry(() => iqlabs.reader.fetchUserConnections(userPubkey, { speed: 'medium' }));
+}
+
 // ─── Signature fetching (Helius-accelerated) ────────────────────────────────
 
 /**
