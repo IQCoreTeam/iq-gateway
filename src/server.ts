@@ -4,7 +4,7 @@ import { Hono } from "hono";
 import { cors } from "hono/cors";
 import { logger } from "hono/logger";
 import { serveStatic } from "hono/bun";
-import { metaRouter, imgRouter, viewRouter, renderRouter, healthRouter, userRouter, tableRouter } from "./routes";
+import { metaRouter, imgRouter, viewRouter, renderRouter, healthRouter, userRouter, tableRouter, dataRouter } from "./routes";
 
 const GENESIS_HASHES: Record<string, string> = {
   "mainnet-beta": "5eykt4UsFv8P8NJdTREpY1vzqKqZKvdpKuc147dw2N9d",
@@ -61,6 +61,7 @@ app.route("/view", viewRouter);
 app.route("/render", renderRouter);
 app.route("/user", userRouter);
 app.route("/table", tableRouter);
+app.route("/data", dataRouter);
 app.route("/", healthRouter);
 
 // Static files

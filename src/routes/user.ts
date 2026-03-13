@@ -112,6 +112,7 @@ userRouter.get("/:pubkey/profile", async (c) => {
     setDiskCache("user", cacheKey, json).catch(() => {});
     return c.json(JSON.parse(json));
   } catch {
+    // Return 200 with just pubkey — frontend treats this as "no profile yet" (not an error)
     return c.json({ pubkey }, 200);
   }
 });

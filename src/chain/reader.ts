@@ -6,7 +6,6 @@ import {
   getHeliusRpcUrl,
   heliusGetAllSignatures,
   heliusGetSignatures,
-  heliusBatchGetTransactions,
 } from "./helius";
 
 const HELIUS_RPC = getHeliusRpcUrl();
@@ -160,6 +159,7 @@ export async function readUserState(userPubkey: string) {
   return withRetry(() => iqlabs.reader.readUserState(userPubkey));
 }
 
+// 'medium' speed balances latency vs RPC call count — 'fast' hammers the RPC, 'slow' is too laggy for UI
 export async function fetchUserConnections(userPubkey: string) {
   return withRetry(() => iqlabs.reader.fetchUserConnections(userPubkey, { speed: 'medium' }));
 }
@@ -293,13 +293,13 @@ export async function readMultipleRows(
           return { sig, row };
         }),
       );
-      for (const result of settled) {
+      for (let j = 0; j < settled.length; j++) {
+        const result = settled[j];
         if (result.status === "fulfilled") {
           results.set(result.value.sig, result.value.row);
         } else {
           // On failure, store null so caller knows it was attempted
-          const sig = chunk[settled.indexOf(result)];
-          results.set(sig, null);
+          results.set(chunk[j], null);
         }
       }
     }
