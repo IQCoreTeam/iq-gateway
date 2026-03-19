@@ -1,14 +1,15 @@
-import { Connection, PublicKey } from "@solana/web3.js";
+import { Connection, PublicKey, type VersionedTransactionResponse } from "@solana/web3.js";
 import iqlabs from "iqlabs-sdk";
+import { reader } from "iqlabs-sdk";
 import { createHash } from "node:crypto";
 import {
   isHeliusEnabled,
-  getHeliusRpcUrl,
+  HELIUS_RPC,
   heliusGetAllSignatures,
   heliusGetSignatures,
+  heliusBatchGetTransactions,
 } from "./helius";
 
-const HELIUS_RPC = getHeliusRpcUrl();
 const PRIMARY_RPC = HELIUS_RPC || process.env.SOLANA_RPC_ENDPOINT || "https://api.mainnet-beta.solana.com";
 const FALLBACK_RPC = process.env.SOLANA_RPC_ENDPOINT || "https://api.mainnet-beta.solana.com";
 
@@ -17,11 +18,10 @@ let activeRpc = PRIMARY_RPC;
 let solConnection = new Connection(PRIMARY_RPC);
 
 if (isHeliusEnabled()) {
-  console.log("[reader] Helius RPC enabled — using enhanced endpoints");
+  console.log("[reader] Helius RPC enabled — using batch transactions + enhanced endpoints");
 }
 
 // ─── Global RPC rate limiter ─────────────────────────────────────────────────
-// When Helius is enabled, default to higher limits since Helius supports more throughput.
 
 const defaultMaxTokens = isHeliusEnabled() ? 100 : 30;
 const defaultRefillRate = isHeliusEnabled() ? 50 : 10;
@@ -164,13 +164,7 @@ export async function fetchUserConnections(userPubkey: string) {
   return withRetry(() => iqlabs.reader.fetchUserConnections(userPubkey, { speed: 'medium' }));
 }
 
-// ─── Signature fetching (Helius-accelerated) ────────────────────────────────
-
-/**
- * Lightweight: fetches just the signature list for a table PDA (1 RPC call).
- * When Helius is enabled, uses Helius RPC directly (bypasses rate limiter
- * for this call since Helius handles the load).
- */
+// Fetches recent signatures for a table PDA. Tries Helius first if available.
 export async function fetchRecentSignatures(
   tablePda: string,
   limit = 50,
@@ -183,7 +177,6 @@ export async function fetchRecentSignatures(
       return await heliusGetSignatures(tablePda, limit, before);
     } catch (e) {
       console.warn("[reader] Helius sig fetch failed, falling back:", e instanceof Error ? e.message : e);
-      // Fall through to standard RPC
     }
   }
 
@@ -196,43 +189,50 @@ export async function fetchRecentSignatures(
   });
 }
 
-/**
- * Read a single row by transaction signature.
- * Returns null for non-row transactions (e.g. table creation).
- */
+// Convert {data, metadata} from readCodeIn into a row object with __txSignature.
+function formatRow(sig: string, data: string | null, metadata: string): Record<string, unknown> {
+  if (!data) return { signature: sig, metadata, data: null };
+  try {
+    const parsed = JSON.parse(data);
+    if (parsed && typeof parsed === "object" && !Array.isArray(parsed)) {
+      return { ...parsed, __txSignature: sig };
+    }
+  } catch {}
+  return { signature: sig, metadata, data };
+}
+
+// Read a single row by transaction signature. Returns null for non-row txs.
 export async function readSingleRow(sig: string): Promise<Record<string, unknown> | null> {
   return withRetry(async () => {
-    let result;
     try {
-      result = await iqlabs.reader.readCodeIn(sig);
+      const { data, metadata } = await iqlabs.reader.readCodeIn(sig);
+      return formatRow(sig, data, metadata);
     } catch (err) {
       if (err instanceof Error && err.message.includes("instruction not found")) {
         return null;
       }
       throw err;
     }
-    const { data, metadata } = result;
-    if (!data) return { signature: sig, metadata, data: null };
-    try {
-      const parsed = JSON.parse(data);
-      if (parsed && typeof parsed === "object" && !Array.isArray(parsed)) {
-        return { ...parsed, __txSignature: sig };
-      }
-    } catch {}
-    return { signature: sig, metadata, data };
   });
 }
 
-/**
- * Fetch the full signature index for a table PDA (up to maxSignatures).
- *
- * With Helius: Direct paginated getSignaturesForAddress against Helius RPC.
- *   - Helius handles 1000-per-page pagination much faster than public RPCs.
- *   - For 10k sigs: ~10 sequential API calls vs ~10 sequential + rate limiting.
- *
- * Without Helius: Falls back to SDK's collectSignatures (same pagination
- *   logic but through the standard RPC with our rate limiter).
- */
+// Parse a pre-fetched transaction into a row. Skips the getTransaction RPC call.
+async function parseTransactionToRow(
+  sig: string,
+  tx: VersionedTransactionResponse,
+): Promise<Record<string, unknown> | null> {
+  try {
+    const { data, metadata } = await reader.readUserInventoryCodeInFromTx(tx);
+    return formatRow(sig, data, metadata);
+  } catch (err) {
+    if (err instanceof Error && err.message.includes("instruction not found")) {
+      return null;
+    }
+    throw err;
+  }
+}
+
+// Fetch the full signature index for a table PDA. Tries Helius first if available.
 export async function fetchSignatureIndex(
   tablePda: string,
   maxSignatures = 10000,
@@ -257,57 +257,51 @@ export async function readRowsBySignatures(
   return withRetry(() => iqlabs.reader.readTableRows(tablePda ?? signatures[0], { signatures }));
 }
 
-// ─── Batch row reading (Helius-accelerated) ─────────────────────────────────
-
-/**
- * Read multiple rows in parallel using Helius batch RPC.
- * Falls back to sequential readSingleRow if Helius is unavailable.
- *
- * This is used by table routes to resolve uncached rows faster:
- * instead of N sequential readCodeIn calls, we batch-fetch the raw
- * transactions from Helius and then parse them with the SDK.
- *
- * Note: We still need SDK-level parsing (readCodeIn) because Helius
- * doesn't understand IQLabs custom instructions. So this function
- * parallelizes the reads rather than truly batching the parsing.
- */
+// Fetch and parse multiple rows in parallel.
+// Tries Helius JSON-RPC batching first (single HTTP POST, requires paid plan).
+// Falls back to parallel readSingleRow with concurrency scaled by RPC capacity.
 export async function readMultipleRows(
   signatures: string[],
 ): Promise<Map<string, Record<string, unknown> | null>> {
   const results = new Map<string, Record<string, unknown> | null>();
-
   if (signatures.length === 0) return results;
 
-  if (isHeliusEnabled() && signatures.length > 3) {
-    // With Helius: run readSingleRow calls in parallel with higher concurrency.
-    // Helius can handle 50+ concurrent requests, so we blast them all at once
-    // in chunks rather than sequentially.
-    metrics.heliusCalls += signatures.length;
-    const CONCURRENCY = 20;
-
-    for (let i = 0; i < signatures.length; i += CONCURRENCY) {
-      const chunk = signatures.slice(i, i + CONCURRENCY);
+  // Try batch fetch (single HTTP call for all transactions)
+  if (isHeliusEnabled()) {
+    metrics.heliusCalls++;
+    metrics.totalCalls++;
+    try {
+      const txMap = await heliusBatchGetTransactions(signatures);
       const settled = await Promise.allSettled(
-        chunk.map(async (sig) => {
-          const row = await readSingleRow(sig);
+        signatures.map(async (sig) => {
+          const tx = txMap.get(sig);
+          if (!tx) return { sig, row: null as Record<string, unknown> | null };
+          const row = await parseTransactionToRow(sig, tx);
           return { sig, row };
         }),
       );
-      for (let j = 0; j < settled.length; j++) {
-        const result = settled[j];
-        if (result.status === "fulfilled") {
-          results.set(result.value.sig, result.value.row);
-        } else {
-          // On failure, store null so caller knows it was attempted
-          results.set(chunk[j], null);
-        }
+      for (const r of settled) {
+        if (r.status === "fulfilled") results.set(r.value.sig, r.value.row);
       }
+      return results;
+    } catch {
+      // Batch not available (free plan) — fall through to parallel individual fetches
     }
-  } else {
-    // Without Helius: sequential reads (existing behavior)
-    for (const sig of signatures) {
-      const row = await readSingleRow(sig);
-      results.set(sig, row);
+  }
+
+  const CONCURRENCY = isHeliusEnabled() ? 20 : 5;
+  for (let i = 0; i < signatures.length; i += CONCURRENCY) {
+    const chunk = signatures.slice(i, i + CONCURRENCY);
+    const settled = await Promise.allSettled(
+      chunk.map(async (sig) => ({ sig, row: await readSingleRow(sig) })),
+    );
+    for (let j = 0; j < settled.length; j++) {
+      const r = settled[j];
+      if (r.status === "fulfilled") {
+        results.set(r.value.sig, r.value.row);
+      } else {
+        results.set(chunk[j], null);
+      }
     }
   }
 

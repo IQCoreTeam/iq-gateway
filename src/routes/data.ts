@@ -1,10 +1,3 @@
-/**
- * /data/:sig — Raw transaction data endpoint
- *
- * Returns the decoded data + metadata from a Solana transaction
- * using iqlabs SDK's readCodeIn. Cached immutably (on-chain data never changes).
- */
-
 import { Hono } from "hono";
 import { readAsset } from "../chain";
 import { MemoryCache, TTL, getDiskCache, setDiskCache, deduped } from "../cache";
@@ -15,19 +8,19 @@ const dataCache = new MemoryCache<string>(1000);
 const inflight = new Map<string, Promise<string>>();
 
 dataRouter.get("/:sig", async (c) => {
-  let sig = c.req.param("sig");
+  const sig = c.req.param("sig");
   if (!sig || sig.length < 80) return c.json({ error: "invalid signature" }, 400);
 
   const cacheKey = `data:${sig}`;
 
   // L1: Memory cache
-  let cached = dataCache.get(cacheKey);
+  const cached = dataCache.get(cacheKey);
   if (cached) {
     return c.json(JSON.parse(cached));
   }
 
-  // L2: Disk cache
-  const disk = await getDiskCache("data", sig);
+  // L2: Disk cache (keyed with "data:" prefix to avoid collision with /meta cache)
+  const disk = await getDiskCache("meta", cacheKey);
   if (disk) {
     const text = new TextDecoder().decode(disk);
     dataCache.set(cacheKey, text, TTL.META_IMMUTABLE);
@@ -42,7 +35,7 @@ dataRouter.get("/:sig", async (c) => {
     });
 
     dataCache.set(cacheKey, result, TTL.META_IMMUTABLE);
-    await setDiskCache("data", sig, Buffer.from(result));
+    await setDiskCache("meta", cacheKey, Buffer.from(result));
 
     return c.json(JSON.parse(result));
   } catch (e: unknown) {

@@ -1,15 +1,6 @@
-/**
- * Helius-specific RPC helpers.
- *
- * When HELIUS_API_KEY is set, these functions use Helius's faster infrastructure
- * for signature scanning and batch transaction fetching.
- *
- * Key advantages over standard RPC:
- *  - Higher rate limits (100+ req/s vs 10 req/s)
- *  - Faster `getSignaturesForAddress` indexing
- *  - JSON-RPC batching for parallel transaction fetches
- *  - Enhanced transaction parsing for known programs
- */
+// Helius RPC helpers — faster signature scanning and batch tx fetching.
+
+import type { VersionedTransactionResponse } from "@solana/web3.js";
 
 const HELIUS_API_KEY = process.env.HELIUS_API_KEY;
 const cluster = process.env.SOLANA_CLUSTER || "devnet";
@@ -21,7 +12,7 @@ const HELIUS_RPC_BASE =
       ? "https://devnet.helius-rpc.com"
       : null;
 
-const HELIUS_RPC = HELIUS_API_KEY && HELIUS_RPC_BASE
+export const HELIUS_RPC = HELIUS_API_KEY && HELIUS_RPC_BASE
   ? `${HELIUS_RPC_BASE}/?api-key=${HELIUS_API_KEY}`
   : null;
 
@@ -29,83 +20,80 @@ export function isHeliusEnabled(): boolean {
   return HELIUS_RPC !== null;
 }
 
-export function getHeliusRpcUrl(): string | null {
-  return HELIUS_RPC;
-}
+// ─── Shared JSON-RPC helper ────────────────────────────────────────────────
 
-// ─── Paginated signature collection ──────────────────────────────────────────
-// Helius handles getSignaturesForAddress significantly faster than public RPCs.
-// This bypasses the SDK's collectSignatures and goes directly to Helius.
-
-export async function heliusGetAllSignatures(
-  address: string,
-  maxSigs = 10000,
-): Promise<string[]> {
+async function rpc(body: object): Promise<any> {
   if (!HELIUS_RPC) throw new Error("Helius not configured");
-
-  const allSigs: string[] = [];
-  let before: string | undefined;
-
-  while (allSigs.length < maxSigs) {
-    const limit = Math.min(1000, maxSigs - allSigs.length);
-    const params: [string, { limit: number; before?: string }] = [
-      address,
-      { limit },
-    ];
-    if (before) params[1].before = before;
-
-    const res = await fetch(HELIUS_RPC, {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({
-        jsonrpc: "2.0",
-        id: 1,
-        method: "getSignaturesForAddress",
-        params,
-      }),
-    });
-
-    if (!res.ok) throw new Error(`Helius RPC error: HTTP ${res.status}`);
-    const json = await res.json() as { result?: { signature: string }[] };
-    const result = json.result;
-    if (!result || result.length === 0) break;
-
-    for (const s of result) allSigs.push(s.signature);
-    before = result[result.length - 1].signature;
-    if (result.length < limit) break;
-  }
-
-  return allSigs;
+  const res = await fetch(HELIUS_RPC, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(body),
+  });
+  if (!res.ok) throw new Error(`Helius RPC error: HTTP ${res.status}`);
+  return res.json();
 }
 
-// ─── Paginated getSignaturesForAddress (single page) ─────────────────────────
-// Thin wrapper used by reader.ts for the rows endpoint's Phase 1 sig scan.
+// ─── Signature fetching ────────────────────────────────────────────────────
 
+// Single-page getSignaturesForAddress.
 export async function heliusGetSignatures(
   address: string,
   limit = 50,
   before?: string,
 ): Promise<string[]> {
-  if (!HELIUS_RPC) throw new Error("Helius not configured");
-
-  const params: [string, { limit: number; before?: string }] = [
-    address,
-    { limit },
-  ];
-  if (before) params[1].before = before;
-
-  const res = await fetch(HELIUS_RPC, {
-    method: "POST",
-    headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({
-      jsonrpc: "2.0",
-      id: 1,
-      method: "getSignaturesForAddress",
-      params,
-    }),
+  const json = await rpc({
+    jsonrpc: "2.0",
+    id: 1,
+    method: "getSignaturesForAddress",
+    params: [address, { limit, ...(before && { before }) }],
   });
+  return (json.result || []).map((s: { signature: string }) => s.signature);
+}
 
-  if (!res.ok) throw new Error(`Helius RPC error: HTTP ${res.status}`);
-  const json = await res.json() as { result?: { signature: string }[] };
-  return (json.result || []).map(s => s.signature);
+// Paginated signature collection — calls heliusGetSignatures in a loop.
+export async function heliusGetAllSignatures(
+  address: string,
+  maxSigs = 10000,
+): Promise<string[]> {
+  const allSigs: string[] = [];
+  let before: string | undefined;
+
+  while (allSigs.length < maxSigs) {
+    const limit = Math.min(1000, maxSigs - allSigs.length);
+    const page = await heliusGetSignatures(address, limit, before);
+    if (page.length === 0) break;
+
+    allSigs.push(...page);
+    before = page[page.length - 1];
+    if (page.length < limit) break;
+  }
+
+  return allSigs;
+}
+
+// ─── Batch transaction fetching ────────────────────────────────────────────
+
+// Fetch multiple transactions in a single HTTP POST via JSON-RPC batching.
+// Returns a Map of signature → transaction (null if not found or errored).
+export async function heliusBatchGetTransactions(
+  signatures: string[],
+): Promise<Map<string, VersionedTransactionResponse | null>> {
+  const results = new Map<string, VersionedTransactionResponse | null>();
+  if (signatures.length === 0) return results;
+
+  const batch = signatures.map((sig, i) => ({
+    jsonrpc: "2.0" as const,
+    id: i,
+    method: "getTransaction",
+    params: [sig, { maxSupportedTransactionVersion: 0, encoding: "json" }],
+  }));
+
+  const responses = await rpc(batch) as Array<{ id: number; result?: VersionedTransactionResponse | null; error?: unknown }>;
+
+  for (const resp of responses) {
+    const sig = signatures[resp.id];
+    results.set(sig, resp.result ?? null);
+  }
+
+  return results;
 }

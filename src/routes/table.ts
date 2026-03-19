@@ -1,7 +1,7 @@
 import { Hono } from "hono";
 import { PublicKey } from "@solana/web3.js";
 import { createHash } from "node:crypto";
-import { fetchSignatureIndex, readRowsBySignatures, fetchRecentSignatures, readSingleRow, readMultipleRows } from "../chain";
+import { fetchSignatureIndex, readRowsBySignatures, fetchRecentSignatures, readMultipleRows } from "../chain";
 import { MemoryCache, TTL, getDiskCache, setDiskCache, deduped } from "../cache";
 
 export const tableRouter = new Hono();
@@ -93,7 +93,7 @@ tableRouter.get("/:tablePda/rows", async (c) => {
         if (mem !== "null") rows.push(JSON.parse(mem));
         continue;
       }
-      const disk = await getDiskCache("rows", rowKey);
+      const disk = await getDiskCache("meta", rowKey);
       if (disk) {
         const json = disk.toString("utf8");
         sliceCache.set(rowKey, json, SLICE_ROW_TTL);
@@ -103,8 +103,7 @@ tableRouter.get("/:tablePda/rows", async (c) => {
       uncached.push(sig);
     }
 
-    // Phase 3: fetch only truly new rows from RPC
-    // Uses readMultipleRows which parallelizes via Helius when available
+    // Phase 3: fetch uncached rows from RPC
     if (uncached.length > 0) {
       const fetched = await readMultipleRows(uncached);
       for (const sig of uncached) {
@@ -115,7 +114,7 @@ tableRouter.get("/:tablePda/rows", async (c) => {
           const rowJson = JSON.stringify(row);
           const rk = cacheKey("row", txSig);
           sliceCache.set(rk, rowJson, SLICE_ROW_TTL);
-          setDiskCache("rows", rk, rowJson).catch(() => {});
+          setDiskCache("meta", rk, rowJson).catch(() => {});
           rows.push(row);
         } else {
           // Cache non-row sigs (table creation etc.) so we don't re-fetch them
@@ -265,7 +264,7 @@ tableRouter.get("/:tablePda/slice", async (c) => {
         if (mem !== "null") rows.push(JSON.parse(mem));
         continue;
       }
-      const disk = await getDiskCache("rows", rowKey);
+      const disk = await getDiskCache("meta", rowKey);
       if (disk) {
         const json = disk.toString("utf8");
         sliceCache.set(rowKey, json, SLICE_ROW_TTL);
@@ -285,7 +284,7 @@ tableRouter.get("/:tablePda/slice", async (c) => {
           const rowJson = JSON.stringify(row);
           const rowKey = cacheKey("row", sig);
           sliceCache.set(rowKey, rowJson, SLICE_ROW_TTL);
-          setDiskCache("rows", rowKey, rowJson).catch(() => {});
+          setDiskCache("meta", rowKey, rowJson).catch(() => {});
         }
       }
       for (const sig of uncached) {
