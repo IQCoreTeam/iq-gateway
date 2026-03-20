@@ -1,7 +1,7 @@
 import { Hono } from "hono";
 import { PublicKey } from "@solana/web3.js";
 import { createHash } from "node:crypto";
-import { fetchSignatureIndex, readRowsBySignatures, fetchRecentSignatures, readMultipleRows } from "../chain";
+import { fetchSignatureIndex, readRowsBySignatures, fetchRecentSignatures, readMultipleRows, readSingleRow } from "../chain";
 import { MemoryCache, TTL, getDiskCache, setDiskCache, deduped } from "../cache";
 
 export const tableRouter = new Hono();
@@ -311,6 +311,71 @@ tableRouter.get("/:tablePda/slice", async (c) => {
     console.error(`[table/slice] failed for ${tablePda}:`, message);
     return c.json({ error: "failed to decode rows" }, 500);
   }
+});
+
+// ─── POST /table/:tablePda/notify ────────────────────────────────────────────
+// Frontend calls this after posting a tx. Gateway fetches that one row,
+// prepends it to the cached rows response so the next /rows request includes
+// it immediately — even before the RPC indexes the new signature.
+
+tableRouter.post("/:tablePda/notify", async (c) => {
+  const tablePda = c.req.param("tablePda");
+  const body = await c.req.json().catch(() => null);
+  const txSig = body?.txSignature;
+  const rowData = body?.row;
+
+  if (!txSig || typeof txSig !== "string") {
+    return c.json({ error: "txSignature required" }, 400);
+  }
+
+  if (!isValidPublicKey(tablePda)) {
+    return c.json({ error: "invalid table PDA" }, 400);
+  }
+
+  // Use row data from frontend if provided, otherwise try fetching from chain
+  const row = rowData
+    ? { ...rowData, __txSignature: txSig }
+    : await readSingleRow(txSig).catch(() => null);
+
+  if (!row) {
+    // Even if we can't get the row, invalidate cache so next fetch is fresh
+    for (const limit of [50, 100, 20, 10, 5]) {
+      const key = cacheKey(tablePda, String(limit), "");
+      rowsCache.delete(key);
+      lastRefresh.delete(key);
+    }
+    console.log(`[notify] ${tablePda.slice(0, 12)}… tx:${txSig.slice(0, 12)}… invalidated (row not available)`);
+    return c.json({ ok: true, cached: false });
+  }
+
+  // Cache the individual row
+  const rowJson = JSON.stringify(row);
+  const rowKey = cacheKey("row", txSig);
+  sliceCache.set(rowKey, rowJson, SLICE_ROW_TTL);
+  setDiskCache("meta", rowKey, rowJson).catch(() => {});
+
+  // Prepend row to all cached head-page responses for this table
+  for (const limit of [50, 100, 20, 10, 5]) {
+    const key = cacheKey(tablePda, String(limit), "");
+    const existing = rowsCache.get(key);
+    if (!existing) continue;
+    const parsed = JSON.parse(existing);
+    const rows: Record<string, unknown>[] = parsed.rows ?? [];
+    if (rows.some((r: Record<string, unknown>) => r.__txSignature === txSig)) continue;
+    rows.unshift(row);
+    const updated = JSON.stringify({ ...parsed, rows, count: rows.length });
+    rowsCache.set(key, updated, HEAD_TTL);
+  }
+
+  // Set refresh timestamp to NOW so background refresh doesn't overwrite
+  // the injected cache for 30s (gives RPC time to index the new sig)
+  const now = Date.now();
+  for (const limit of [50, 100, 20, 10, 5]) {
+    lastRefresh.set(cacheKey(tablePda, String(limit), ""), now);
+  }
+
+  console.log(`[notify] ${tablePda.slice(0, 12)}… tx:${txSig.slice(0, 12)}… injected`);
+  return c.json({ ok: true, cached: true });
 });
 
 // ─── Cache stats ─────────────────────────────────────────────────────────────
