@@ -1,6 +1,6 @@
 import { Connection, PublicKey, type VersionedTransactionResponse } from "@solana/web3.js";
-import iqlabs from "iqlabs-sdk";
-import { reader } from "iqlabs-sdk";
+import iqlabs from "@iqlabs-official/solana-sdk";
+import { reader } from "@iqlabs-official/solana-sdk";
 import { createHash } from "node:crypto";
 import {
   isHeliusEnabled,

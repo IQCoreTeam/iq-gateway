@@ -9,3 +9,4 @@ bun.lockb
 test-keypair.json
 .DS_Store
 deploy.yaml
+.next
