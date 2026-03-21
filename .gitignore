@@ -8,3 +8,4 @@ bun.lockb
 *.log
 test-keypair.json
 .DS_Store
+deploy.yaml
