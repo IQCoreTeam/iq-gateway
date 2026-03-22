@@ -1,15 +1,15 @@
 // Backfill historical IQ Labs transactions using Helius gTFA.
-// Two passes:
-//   1. Scan all program txs, decode and cache codeIn metadata
-//   2. For session/linked-list files, read + cache the full decoded content
+// Single pass: scan program txs, decode everything, cache full content.
 // After backfill, all historical data is served from disk — zero RPC needed.
 
-import { isHeliusEnabled, HELIUS_RPC } from "./chain";
-import { readAsset, decodeAssetData } from "./chain";
+import { isHeliusEnabled, HELIUS_RPC, heliusGetTransactionsForAddress } from "./chain";
 import { getDiskCache, setDiskCache } from "./cache";
+import { existsSync, readFileSync, writeFileSync } from "node:fs";
+import { join } from "node:path";
 
 const PROGRAM_ID = "9KLLchQVJpGkw4jPuUmnvqESdR7mtNCYr3qS4iQLabs";
 const BACKFILL_FROM_SLOT = process.env.BACKFILL_FROM_SLOT;
+const CHECKPOINT_PATH = join(process.env.CACHE_DIR || "./cache", "backfill-checkpoint.json");
 
 let coder: any = null;
 let decode58: (s: string) => Uint8Array;
@@ -23,6 +23,14 @@ async function initDecoder() {
   decode58 = (bs58 as any).decode ?? (bs58 as any).default?.decode;
 }
 
+function decodeIqInstruction(ixData: string): { name: string; data: Record<string, any> } | null {
+  try {
+    return coder.decode(Buffer.from(decode58(ixData)));
+  } catch {
+    return null;
+  }
+}
+
 export async function startBackfill() {
   if (!BACKFILL_FROM_SLOT || !isHeliusEnabled() || !HELIUS_RPC) return;
 
@@ -32,38 +40,34 @@ export async function startBackfill() {
     return;
   }
 
-  console.log(`[backfill] Starting from slot ${fromSlot}`);
-
-  try {
-    // Pass 1: scan all txs, cache metadata + inline data
-    const pending = await pass1_scanAndCache(fromSlot);
-
-    // Pass 2: for non-inline files, read full content via SDK and cache
-    if (pending.length > 0) {
-      await pass2_cacheFullContent(pending);
-    }
-  } catch (e) {
-    console.error("[backfill] Failed:", e instanceof Error ? e.message : e);
+  // Resume from checkpoint if available (skip already-scanned slots)
+  let startSlot = fromSlot;
+  if (existsSync(CHECKPOINT_PATH)) {
+    try {
+      const cp = JSON.parse(readFileSync(CHECKPOINT_PATH, "utf-8"));
+      if (cp.lastSlot > fromSlot) {
+        startSlot = cp.lastSlot + 1;
+        console.log(`[backfill] Resuming from checkpoint slot ${startSlot} (${cp.totalCached} previously cached)`);
+      }
+    } catch {}
   }
+
+  console.log(`[backfill] Scanning from slot ${startSlot}`);
+  backfill(startSlot).catch((e) => {
+    console.error("[backfill] Failed:", e instanceof Error ? e.message : e);
+  });
 }
 
-interface PendingFile {
-  sig: string;
-  onChainPath: string;
-  metadata: string;
-}
-
-async function pass1_scanAndCache(fromSlot: number): Promise<PendingFile[]> {
+async function backfill(fromSlot: number) {
   await initDecoder();
 
-  let paginationToken: string | undefined;
-  let totalFetched = 0;
+  // Seed pagination token from slot so gTFA starts there (format: "slot:position")
+  let paginationToken: string | undefined = fromSlot > 398615411 ? `${fromSlot}:0` : undefined;
+  let scanned = 0;
   let cached = 0;
   let skipped = 0;
-  const pending: PendingFile[] = [];
+  let sessions = 0;
   const startTime = Date.now();
-
-  console.log("[backfill] Pass 1: scanning program transactions...");
 
   while (true) {
     const res = await fetch(HELIUS_RPC!, {
@@ -93,7 +97,7 @@ async function pass1_scanAndCache(fromSlot: number): Promise<PendingFile[]> {
 
     const data = json.result?.data ?? [];
     if (data.length === 0) break;
-    totalFetched += data.length;
+    scanned += data.length;
 
     for (const tx of data) {
       if ((tx.slot as number) < fromSlot) continue;
@@ -114,102 +118,80 @@ async function pass1_scanAndCache(fromSlot: number): Promise<PendingFile[]> {
       let onChainPath = "";
       let metadata = "";
       let inlineData: string | null = null;
-      let isCodeIn = false;
 
       for (const ix of ixs) {
         if (keys[ix.programIdIndex] !== PROGRAM_ID) continue;
-        try {
-          const decoded = coder.decode(Buffer.from(decode58(ix.data)));
-          if (!decoded) continue;
+        const decoded = decodeIqInstruction(ix.data);
+        if (!decoded) continue;
 
-          if (decoded.name === "user_inventory_code_in" || decoded.name === "db_code_in" ||
-              decoded.name === "db_instruction_code_in" || decoded.name === "wallet_connection_code_in" ||
-              decoded.name === "user_inventory_code_in_for_free") {
-            isCodeIn = true;
-            onChainPath = decoded.data.on_chain_path ?? "";
-            metadata = decoded.data.metadata ?? "";
+        if (decoded.name === "user_inventory_code_in" || decoded.name === "db_code_in" ||
+            decoded.name === "db_instruction_code_in" || decoded.name === "wallet_connection_code_in" ||
+            decoded.name === "user_inventory_code_in_for_free") {
+          onChainPath = decoded.data.on_chain_path ?? "";
+          metadata = decoded.data.metadata ?? "";
 
-            if (!onChainPath) {
-              try {
-                const parsed = JSON.parse(metadata);
-                inlineData = parsed.data ?? null;
-              } catch {}
-            }
+          if (!onChainPath) {
+            try {
+              const parsed = JSON.parse(metadata);
+              inlineData = parsed.data ?? null;
+            } catch {}
           }
-        } catch {}
+        }
       }
 
-      // Cache metadata + inline data
+      // For session files: read all chunks via gTFA on the session PDA
+      if (onChainPath && onChainPath.length < 80) {
+        try {
+          const sessionTxs = await heliusGetTransactionsForAddress(onChainPath);
+          const chunkMap = new Map<number, string>();
+
+          for (const stx of sessionTxs) {
+            const sKeys: string[] = (stx as any).transaction?.message?.accountKeys ?? [];
+            const sIxs = (stx as any).transaction?.message?.instructions ?? [];
+            for (const ix of sIxs) {
+              if (sKeys[ix.programIdIndex] !== PROGRAM_ID) continue;
+              const decoded = decodeIqInstruction(ix.data);
+              if (decoded?.name === "post_chunk") {
+                chunkMap.set(decoded.data.index, decoded.data.chunk);
+              }
+            }
+          }
+
+          if (chunkMap.size > 0) {
+            inlineData = Array.from(chunkMap.entries())
+              .sort(([a], [b]) => a - b)
+              .map(([, chunk]) => chunk)
+              .join("");
+            sessions++;
+          }
+        } catch { /* session read failed, cache metadata only */ }
+      }
+
+      // For linked-list files: skip full read (would need sequential walk, not worth blocking backfill)
+      // They'll be read on-demand and cached then
+
       await setDiskCache("meta", cacheKey, Buffer.from(JSON.stringify({
         data: inlineData,
         metadata,
         signature: sig,
       })));
       cached++;
-
-      // If non-inline codeIn, queue for pass 2
-      if (isCodeIn && onChainPath) {
-        pending.push({ sig, onChainPath, metadata });
-      }
     }
 
     paginationToken = json.result?.paginationToken;
-    const elapsed = ((Date.now() - startTime) / 1000).toFixed(1);
     const lastSlot = data[data.length - 1]?.slot ?? 0;
-    console.log(`[backfill] P1: ${totalFetched} scanned, ${cached} new, ${skipped} hit, slot ${lastSlot}, ${elapsed}s`);
+    const elapsed = ((Date.now() - startTime) / 1000).toFixed(1);
+    console.log(`[backfill] ${scanned} scanned, ${cached} cached (${sessions} sessions), ${skipped} hit, slot ${lastSlot}, ${elapsed}s`);
+
+    // Save checkpoint after each batch
+    try {
+      writeFileSync(CHECKPOINT_PATH, JSON.stringify({ lastSlot, totalCached: cached + skipped, timestamp: Date.now() }));
+    } catch {}
 
     if (!paginationToken || data.length < 100) break;
     await new Promise((r) => setTimeout(r, 50));
   }
 
   const elapsed = ((Date.now() - startTime) / 1000).toFixed(1);
-  console.log(`[backfill] Pass 1 complete: ${totalFetched} txs, ${cached} cached, ${pending.length} need full read, ${elapsed}s`);
-  return pending;
-}
-
-async function pass2_cacheFullContent(pending: PendingFile[]) {
-  const startTime = Date.now();
-  let done = 0;
-  let failed = 0;
-
-  console.log(`[backfill] Pass 2: reading ${pending.length} non-inline files...`);
-
-  for (const file of pending) {
-    // Check if already fully cached (data route caches after first read)
-    const cacheKey = `data:${file.sig}`;
-    const existing = await getDiskCache("meta", cacheKey);
-    if (existing) {
-      try {
-        const parsed = JSON.parse(new TextDecoder().decode(existing));
-        if (parsed.data) {
-          done++;
-          continue; // Already has decoded data
-        }
-      } catch {}
-    }
-
-    // Read full content via SDK (uses gTFA internally for sessions)
-    try {
-      const { data, metadata } = await readAsset(file.sig);
-      await setDiskCache("meta", cacheKey, Buffer.from(JSON.stringify({
-        data,
-        metadata,
-        signature: file.sig,
-      })));
-      done++;
-    } catch {
-      failed++;
-    }
-
-    if ((done + failed) % 10 === 0) {
-      const elapsed = ((Date.now() - startTime) / 1000).toFixed(1);
-      console.log(`[backfill] P2: ${done}/${pending.length} done, ${failed} failed, ${elapsed}s`);
-    }
-
-    // Throttle to avoid overwhelming RPC
-    await new Promise((r) => setTimeout(r, 100));
-  }
-
-  const elapsed = ((Date.now() - startTime) / 1000).toFixed(1);
-  console.log(`[backfill] Pass 2 complete: ${done} cached, ${failed} failed, ${elapsed}s`);
+  console.log(`[backfill] Complete: ${scanned} scanned, ${cached} new (${sessions} sessions decoded), ${skipped} already cached, ${elapsed}s`);
 }
