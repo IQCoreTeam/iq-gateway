@@ -6,3 +6,4 @@ export { healthRouter } from "./health";
 export { userRouter } from "./user";
 export { tableRouter } from "./table";
 export { dataRouter } from "./data";
+export { siteRouter } from "./site";

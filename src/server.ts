@@ -4,7 +4,10 @@ import { Hono } from "hono";
 import { cors } from "hono/cors";
 import { logger } from "hono/logger";
 import { serveStatic } from "hono/bun";
-import { metaRouter, imgRouter, viewRouter, renderRouter, healthRouter, userRouter, tableRouter, dataRouter } from "./routes";
+import { metaRouter, imgRouter, viewRouter, renderRouter, healthRouter, userRouter, tableRouter, dataRouter, siteRouter } from "./routes";
+import { serveSiteAsset } from "./routes/site";
+import { startBackfill } from "./backfill";
+import type { Context, Next } from "hono";
 
 const GENESIS_HASHES: Record<string, string> = {
   "mainnet-beta": "5eykt4UsFv8P8NJdTREpY1vzqKqZKvdpKuc147dw2N9d",
@@ -62,12 +65,28 @@ app.route("/render", renderRouter);
 app.route("/user", userRouter);
 app.route("/table", tableRouter);
 app.route("/data", dataRouter);
+app.route("/site", siteRouter);
 app.route("/", healthRouter);
+
+// Serve site assets for root-relative paths (e.g. /blockchan.webp, /_next/...)
+app.use("/*", async (c: Context, next: Next) => {
+  const result = await serveSiteAsset(c.req.path);
+  if (result) {
+    const headers: Record<string, string> = {};
+    result.headers.forEach((v, k) => { headers[k] = v; });
+    const body = await result.arrayBuffer();
+    return c.body(body, result.status as 200, headers);
+  }
+  await next();
+});
 
 // Static files
 app.use("/*", serveStatic({ root: "./public" }));
 
 const port = Number(process.env.PORT) || 3000;
 console.log(`IQ Gateway running on port ${port} [${process.env.SOLANA_CLUSTER}]`);
+
+// Background backfill of historical transactions (non-blocking)
+startBackfill();
 
 export default { port, fetch: app.fetch, idleTimeout: 120 };

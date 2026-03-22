@@ -38,7 +38,8 @@ That's it. Your gateway is live at `http://localhost:3000`.
 |----------|----------|-------------|
 | `SOLANA_CLUSTER` | Yes | `devnet`, `mainnet-beta`, or `testnet` |
 | `SOLANA_RPC_ENDPOINT` | Yes | Solana RPC URL (must match cluster) |
-| `HELIUS_API_KEY` | No | Helius API key for faster batch fetching |
+| `HELIUS_API_KEY` | No | Helius API key for faster reads (paid plan enables gTFA + batch) |
+| `BACKFILL_FROM_SLOT` | No | Start slot for historical backfill (requires paid Helius). Set to `398615411` for full IQ Labs history |
 | `PORT` | No | Server port (default: 3000) |
 | `BASE_PATH` | No | URL prefix if behind reverse proxy |
 | `MAX_CACHE_SIZE` | No | Max disk cache before cleanup (default: 10GB) |
@@ -75,6 +76,20 @@ That's it. Your gateway is live at `http://localhost:3000`.
 | `GET /user/{pubkey}/state` | User state |
 | `GET /user/{pubkey}/connections` | User connections |
 
+### Site Hosting (Solana Permanent Web)
+
+| Endpoint | Description |
+|----------|-------------|
+| `GET /site/{manifestSig}` | Serve a website from Solana (index.html) |
+| `GET /site/{manifestSig}/{path}` | Serve any file from an on-chain manifest |
+
+Supports both Iqoogle and gateway manifest formats. SPA fallback for unknown paths. Root-relative asset requests (e.g. `/logo.webp`) are resolved against the active manifest.
+
+Deploy a site:
+```bash
+bun run scripts/deploy-site.ts ./my-site ./keypair.json
+```
+
 ### System
 
 | Endpoint | Description |
@@ -100,6 +115,16 @@ Individual rows are cached for 24 hours (on-chain data is immutable). Head page 
 docker build -t iq-gateway .
 docker run -p 3000:3000 --env-file .env iq-gateway
 ```
+
+## Helius Integration
+
+With a paid Helius plan (`HELIUS_API_KEY`), the gateway automatically uses:
+
+- **gTFA** (`getTransactionsForAddress`) — 100 full transactions per call, ~100x faster reads for session files
+- **Batch JSON-RPC** — multiple `getTransaction` calls in one POST for table row reads
+- **Backfill** — pre-cache all historical IQ Labs transactions on startup (set `BACKFILL_FROM_SLOT`)
+
+Without Helius, everything still works using standard Solana RPC — just slower for large files.
 
 ## Architecture
 
