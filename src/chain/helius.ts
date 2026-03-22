@@ -12,27 +12,40 @@ const HELIUS_RPC_BASE =
       ? "https://devnet.helius-rpc.com"
       : null;
 
-const HELIUS_API_KEY = process.env.HELIUS_API_KEY;
+// supports single HELIUS_API_KEY or comma-separated HELIUS_API_KEYS with 429 fallback
+const HELIUS_KEYS: string[] = (
+  process.env.HELIUS_API_KEYS?.split(",").map(k => k.trim()).filter(Boolean) ??
+  (process.env.HELIUS_API_KEY ? [process.env.HELIUS_API_KEY] : [])
+);
 
-export const HELIUS_RPC = HELIUS_API_KEY && HELIUS_RPC_BASE
-  ? `${HELIUS_RPC_BASE}/?api-key=${HELIUS_API_KEY}`
+export const HELIUS_RPC = HELIUS_KEYS.length > 0 && HELIUS_RPC_BASE
+  ? `${HELIUS_RPC_BASE}/?api-key=${HELIUS_KEYS[0]}`
   : null;
 
 export function isHeliusEnabled(): boolean {
-  return HELIUS_RPC !== null;
+  return HELIUS_KEYS.length > 0 && HELIUS_RPC_BASE !== null;
 }
 
-// ─── JSON-RPC helper ───────────────────────────────────────────────────────
+if (HELIUS_KEYS.length > 1) {
+  console.log(`[helius] ${HELIUS_KEYS.length} keys loaded (fallback on 429)`);
+}
+
+// ─── JSON-RPC helper with key fallback on 429 ─────────────────────────────
 
 async function rpc(body: object): Promise<any> {
-  if (!HELIUS_RPC) throw new Error("Helius not configured");
-  const res = await fetch(HELIUS_RPC, {
-    method: "POST",
-    headers: { "Content-Type": "application/json" },
-    body: JSON.stringify(body),
-  });
-  if (!res.ok) throw new Error(`Helius RPC error: HTTP ${res.status}`);
-  return res.json();
+  if (!HELIUS_RPC_BASE || HELIUS_KEYS.length === 0) throw new Error("Helius not configured");
+
+  for (let i = 0; i < HELIUS_KEYS.length; i++) {
+    const url = `${HELIUS_RPC_BASE}/?api-key=${HELIUS_KEYS[i]}`;
+    const res = await fetch(url, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(body),
+    });
+    if (res.status === 429 && i < HELIUS_KEYS.length - 1) continue;
+    if (!res.ok) throw new Error(`Helius RPC error: HTTP ${res.status}`);
+    return res.json();
+  }
 }
 
 // ─── gTFA: getTransactionsForAddress ───────────────────────────────────────

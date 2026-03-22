@@ -10,3 +10,8 @@ test-keypair.json
 .DS_Store
 deploy.yaml
 .next
+deploy-backfill.yaml
+deploy-production.yaml
+sdk-override/
+deploy-backfill.yaml
+deploy-production.yaml

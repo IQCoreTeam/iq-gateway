@@ -1,14 +1,20 @@
 import { Hono } from "hono";
 import { readAsset, decodeAssetData, generateETag } from "../chain";
 import { MemoryCache, TTL, getDiskCache, setDiskCache } from "../cache";
+import { existsSync, readFileSync, writeFileSync } from "node:fs";
+import { join } from "node:path";
 
 export const siteRouter = new Hono();
 
 const manifestCache = new MemoryCache<string>(200);
 const fileCache = new MemoryCache<Buffer>(500);
 
-// Track the last-served manifest so root-relative asset requests can be resolved
-let activeManifestSig: string | null = null;
+// Persist active manifest across restarts
+const ACTIVE_MANIFEST_PATH = join(process.env.CACHE_DIR || "./cache", "active-manifest.txt");
+let activeManifestSig: string | null = (() => {
+  try { return existsSync(ACTIVE_MANIFEST_PATH) ? readFileSync(ACTIVE_MANIFEST_PATH, "utf-8").trim() : null; }
+  catch { return null; }
+})();
 
 // Sequential read queue to avoid RPC rate limits
 let readQueue: Promise<void> = Promise.resolve();
@@ -96,6 +102,26 @@ async function fetchManifest(sig: string): Promise<Manifest> {
     return JSON.parse(text) as Manifest;
   }
 
+  // Check backfill cache
+  const backfillData = await getDiskCache("meta", `data:${sig}`);
+  if (backfillData) {
+    try {
+      const parsed = JSON.parse(new TextDecoder().decode(backfillData));
+      if (parsed.data) {
+        const decoded = decodeAssetData(parsed.data);
+        const text = decoded.toString("utf-8");
+        const raw = JSON.parse(text);
+        const manifest = parseManifest(raw);
+        if (Object.keys(manifest.files).length > 0) {
+          const normalized = JSON.stringify(manifest);
+          manifestCache.set(key, normalized, TTL.META_IMMUTABLE);
+          await setDiskCache("site", sig, Buffer.from(normalized));
+          return manifest;
+        }
+      }
+    } catch {}
+  }
+
   const { data } = await readAsset(sig);
   if (!data) throw new Error("manifest not found");
 
@@ -119,15 +145,29 @@ async function fetchFile(sig: string): Promise<Buffer> {
   const cached = fileCache.get(key);
   if (cached) return cached;
 
+  // Check site-file disk cache
   const disk = await getDiskCache("site-file", sig);
   if (disk) {
     fileCache.set(key, disk, TTL.IMAGE);
     return disk;
   }
 
+  // Check backfill cache (stored under data: prefix by backfill.ts)
+  const backfillData = await getDiskCache("meta", `data:${sig}`);
+  if (backfillData) {
+    try {
+      const parsed = JSON.parse(new TextDecoder().decode(backfillData));
+      if (parsed.data) {
+        const buf = decodeAssetData(parsed.data);
+        fileCache.set(key, buf, TTL.IMAGE);
+        await setDiskCache("site-file", sig, buf);
+        return buf;
+      }
+    } catch {}
+  }
+
   // Queue chain reads to avoid RPC rate limits
   return enqueueRead(async () => {
-    // Double-check cache (another request may have loaded it while queued)
     const rechecked = fileCache.get(key);
     if (rechecked) return rechecked;
 
@@ -179,6 +219,7 @@ siteRouter.get("/:sig{.+}", async (c) => {
   }
 
   activeManifestSig = manifestSig;
+  try { writeFileSync(ACTIVE_MANIFEST_PATH, manifestSig); } catch {}
 
   let manifest: Manifest;
   try {
