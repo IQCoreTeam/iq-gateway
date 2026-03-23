@@ -4,7 +4,7 @@
 
 import { isHeliusEnabled, HELIUS_RPC, heliusGetTransactionsForAddress } from "./chain";
 import { getDiskCache, setDiskCache } from "./cache";
-import { existsSync, readFileSync, writeFileSync } from "node:fs";
+import { existsSync, readFileSync, writeFileSync, unlinkSync } from "node:fs";
 import { join } from "node:path";
 
 const PROGRAM_ID = "9KLLchQVJpGkw4jPuUmnvqESdR7mtNCYr3qS4iQLabs";
@@ -40,14 +40,21 @@ export async function startBackfill() {
     return;
   }
 
-  // Resume from checkpoint if available (skip already-scanned slots)
+  // Resume from checkpoint if cache is intact
   let startSlot = fromSlot;
   if (existsSync(CHECKPOINT_PATH)) {
     try {
       const cp = JSON.parse(readFileSync(CHECKPOINT_PATH, "utf-8"));
       if (cp.lastSlot > fromSlot) {
-        startSlot = cp.lastSlot + 1;
-        console.log(`[backfill] Resuming from checkpoint slot ${startSlot} (${cp.totalCached} previously cached)`);
+        // Verify cache DB exists
+        const cacheDb = join(process.env.CACHE_DIR || "./cache", "cache.db");
+        if (existsSync(cacheDb)) {
+          startSlot = cp.lastSlot + 1;
+          console.log(`[backfill] Resuming from checkpoint slot ${startSlot} (${cp.totalCached} previously cached)`);
+        } else {
+          console.log(`[backfill] Checkpoint found but cache DB missing — rescanning from ${fromSlot}`);
+          unlinkSync(CHECKPOINT_PATH);
+        }
       }
     } catch {}
   }
@@ -67,6 +74,7 @@ async function backfill(fromSlot: number) {
   let cached = 0;
   let skipped = 0;
   let sessions = 0;
+  let firstSig = "";
   const startTime = Date.now();
 
   while (true) {
@@ -108,6 +116,7 @@ async function backfill(fromSlot: number) {
       const cacheKey = `data:${sig}`;
       const existing = await getDiskCache("meta", cacheKey);
       if (existing) {
+        if (!firstSig) firstSig = sig;
         skipped++;
         continue;
       }
@@ -176,6 +185,7 @@ async function backfill(fromSlot: number) {
         signature: sig,
       })));
       cached++;
+      if (!firstSig) firstSig = sig;
     }
 
     paginationToken = json.result?.paginationToken;
@@ -185,7 +195,7 @@ async function backfill(fromSlot: number) {
 
     // Save checkpoint after each batch
     try {
-      writeFileSync(CHECKPOINT_PATH, JSON.stringify({ lastSlot, totalCached: cached + skipped, timestamp: Date.now() }));
+      writeFileSync(CHECKPOINT_PATH, JSON.stringify({ lastSlot, totalCached: cached + skipped, firstSig, timestamp: Date.now() }));
     } catch {}
 
     if (!paginationToken || data.length < 100) break;

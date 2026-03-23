@@ -4,9 +4,6 @@ WORKDIR /app
 COPY package.json ./
 RUN bun install
 
-# Override npm SDK with local build (includes helius gTFA)
-COPY sdk-override/ ./node_modules/@iqlabs-official/solana-sdk/dist/
-
 COPY src ./src
 COPY fonts ./fonts
 COPY public ./public
