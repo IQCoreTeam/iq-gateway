@@ -39,6 +39,7 @@ That's it. Your gateway is live at `http://localhost:3000`.
 | `SOLANA_CLUSTER` | Yes | `devnet`, `mainnet-beta`, or `testnet` |
 | `SOLANA_RPC_ENDPOINT` | Yes | Solana RPC URL (must match cluster) |
 | `HELIUS_API_KEY` | No | Helius API key for faster reads (paid plan enables gTFA + batch) |
+| `HELIUS_API_KEYS` | No | Comma-separated Helius keys for 429 fallback (overrides `HELIUS_API_KEY`) |
 | `BACKFILL_FROM_SLOT` | No | Start slot for historical backfill (requires paid Helius). Set to `398615411` for full IQ Labs history |
 | `PORT` | No | Server port (default: 3000) |
 | `BASE_PATH` | No | URL prefix if behind reverse proxy |
@@ -109,13 +110,6 @@ Three-tier cache with different TTLs:
 
 Individual rows are cached for 24 hours (on-chain data is immutable). Head page responses are cached for 60 seconds with throttled background refresh.
 
-## Docker
-
-```bash
-docker build -t iq-gateway .
-docker run -p 3000:3000 --env-file .env iq-gateway
-```
-
 ## Helius Integration
 
 With a paid Helius plan (`HELIUS_API_KEY`), the gateway automatically uses:
@@ -125,6 +119,109 @@ With a paid Helius plan (`HELIUS_API_KEY`), the gateway automatically uses:
 - **Backfill** — pre-cache all historical IQ Labs transactions on startup (set `BACKFILL_FROM_SLOT`)
 
 Without Helius, everything still works using standard Solana RPC — just slower for large files.
+
+## Deployment
+
+### VPS / Bare Metal
+
+1. Build and run with Docker:
+```bash
+docker build -t iq-gateway .
+docker run -d \
+  -p 3000:3000 \
+  -v iq-cache:/app/cache \
+  --env-file .env \
+  --restart unless-stopped \
+  iq-gateway
+```
+
+2. Put it behind a reverse proxy (nginx, caddy, etc.) for SSL:
+```nginx
+server {
+    listen 443 ssl;
+    server_name gateway.yourdomain.com;
+
+    ssl_certificate     /etc/letsencrypt/live/gateway.yourdomain.com/fullchain.pem;
+    ssl_certificate_key /etc/letsencrypt/live/gateway.yourdomain.com/privkey.pem;
+
+    location / {
+        proxy_pass http://127.0.0.1:3000;
+        proxy_set_header Host $host;
+        proxy_set_header X-Forwarded-For $remote_addr;
+    }
+}
+```
+
+3. Point DNS:
+```
+Type:  A
+Name:  gateway
+Value: <your-server-ip>
+```
+
+### Akash (Decentralized)
+
+1. Create an SDL file (`deploy.yaml`):
+```yaml
+---
+version: "2.0"
+services:
+  gateway:
+    image: ghcr.io/iqcoreteam/iq-gateway:latest
+    expose:
+      - port: 3000
+        as: 80
+        accept:
+          - gateway.yourdomain.com
+        to:
+          - global: true
+    env:
+      - SOLANA_CLUSTER=mainnet-beta
+      - SOLANA_RPC_ENDPOINT=https://api.mainnet-beta.solana.com
+      - PORT=3000
+    params:
+      storage:
+        cache:
+          mount: /app/cache
+          readOnly: false
+profiles:
+  compute:
+    gateway:
+      resources:
+        cpu:
+          units: 2
+        memory:
+          size: 2Gi
+        storage:
+          - size: 1Gi
+          - name: cache
+            size: 10Gi
+            attributes:
+              persistent: true
+              class: beta3
+  placement:
+    dcloud:
+      pricing:
+        gateway:
+          denom: uakt
+          amount: 100000
+deployment:
+  gateway:
+    dcloud:
+      profile: gateway
+      count: 1
+```
+
+2. Deploy via [Akash Console](https://console.akash.network) or CLI
+
+3. Point DNS to the ingress URI Akash gives you:
+```
+Type:   CNAME
+Name:   gateway
+Value:  <your-deployment>.ingress.akashprovid.com
+```
+
+The `accept` field in the SDL tells the Akash provider to route traffic for your domain to the container.
 
 ## Architecture
 
