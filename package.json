@@ -10,7 +10,7 @@
   },
   "dependencies": {
     "@coral-xyz/anchor": "^0.32.1",
-    "@iqlabs-official/solana-sdk": "^0.1.12",
+    "@iqlabs-official/solana-sdk": "^0.1.14",
     "@metaplex-foundation/mpl-token-metadata": "^3.4.0",
     "@metaplex-foundation/umi": "^1.4.1",
     "@metaplex-foundation/umi-bundle-defaults": "^1.4.1",
