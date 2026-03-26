@@ -1,5 +1,6 @@
 import { Hono } from "hono";
-import { PublicKey } from "@solana/web3.js";
+import { Connection, PublicKey } from "@solana/web3.js";
+import { BorshAccountsCoder } from "@coral-xyz/anchor";
 import { createHash } from "node:crypto";
 import { fetchSignatureIndex, readRowsBySignatures, fetchRecentSignatures, readMultipleRows, readSingleRow } from "../chain";
 import { MemoryCache, TTL, getDiskCache, setDiskCache, deduped } from "../cache";
@@ -377,6 +378,54 @@ tableRouter.post("/:tablePda/notify", async (c) => {
 
   console.log(`[notify] ${tablePda.slice(0, 12)}… tx:${txSig.slice(0, 12)}… injected`);
   return c.json({ ok: true, cached: true });
+});
+
+// ─── /table/:tablePda/meta ───────────────────────────────────────────────────
+
+const metaCache = new MemoryCache<string>(200);
+const META_TTL = 5 * 60 * 1000; // 5 min — table metadata rarely changes
+
+const idl = require("@iqlabs-official/solana-sdk/idl/code_in.json");
+const accountCoder = new BorshAccountsCoder(idl);
+const metaRpc = new Connection(
+  process.env.SOLANA_RPC_ENDPOINT || "https://api.mainnet-beta.solana.com",
+);
+
+tableRouter.get("/:tablePda/meta", async (c) => {
+  const tablePda = c.req.param("tablePda");
+  if (!isValidPublicKey(tablePda)) return c.json({ error: "invalid PDA" }, 400);
+
+  const cached = metaCache.get(tablePda);
+  if (cached) return c.json(JSON.parse(cached));
+
+  try {
+    const info = await metaRpc.getAccountInfo(new PublicKey(tablePda));
+    if (!info) return c.json({ error: "account not found" }, 404);
+
+    const decoded = accountCoder.decode("Table", info.data) as any;
+    const g = decoded.gate;
+    const mint = g?.mint?.toBase58?.() ?? "";
+    const isGated = mint && mint !== "11111111111111111111111111111111";
+
+    const toBuf = (v: any) => Buffer.isBuffer(v) ? v : Buffer.from(v?.data ?? v ?? []);
+
+    const meta = {
+      name: toBuf(decoded.name).toString("utf8").replace(/\0/g, ""),
+      columns: (decoded.column_names ?? []).map((c: any) => toBuf(c).toString("utf8")),
+      idCol: toBuf(decoded.id_col).toString("utf8"),
+      gate: isGated ? {
+        mint,
+        amount: g.amount?.toNumber?.() ?? Number(g.amount) ?? 0,
+        gateType: g.gate_type ?? 0,
+      } : null,
+    };
+
+    const json = JSON.stringify(meta);
+    metaCache.set(tablePda, json, META_TTL);
+    return c.json(meta);
+  } catch (e) {
+    return c.json({ error: "failed to decode table" }, 500);
+  }
 });
 
 // ─── Cache stats ─────────────────────────────────────────────────────────────
