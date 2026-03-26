@@ -133,7 +133,8 @@ tableRouter.get("/:tablePda/rows", async (c) => {
 
     const json = JSON.stringify(buildRowsResponse(tablePda, rows, limit, before));
     rowsCache.set(key, json, ttl);
-    setDiskCache("rows", key, json).catch(() => {});
+    if (rows.length > 0) setDiskCache("rows", key, json).catch(() => {});
+    console.log(`[rows] ${tablePda.slice(0,8)} sigs=${signatures.length} uncached=${uncached.length} rows=${rows.length}`);
     return json;
   }
 

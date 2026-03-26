@@ -1,6 +1,6 @@
-import { Connection, PublicKey, type VersionedTransactionResponse } from "@solana/web3.js";
+import { Connection, PublicKey } from "@solana/web3.js";
+import { BorshInstructionCoder } from "@coral-xyz/anchor";
 import iqlabs from "@iqlabs-official/solana-sdk";
-import { reader } from "@iqlabs-official/solana-sdk";
 import { createHash } from "node:crypto";
 import {
   isHeliusEnabled,
@@ -14,7 +14,6 @@ const PRIMARY_RPC = HELIUS_RPC || process.env.SOLANA_RPC_ENDPOINT || "https://ap
 const FALLBACK_RPC = process.env.SOLANA_RPC_ENDPOINT || "https://api.mainnet-beta.solana.com";
 
 iqlabs.setRpcUrl(PRIMARY_RPC);
-let activeRpc = PRIMARY_RPC;
 let solConnection = new Connection(PRIMARY_RPC);
 
 if (isHeliusEnabled()) {
@@ -100,13 +99,11 @@ async function withRetry<T>(fn: () => Promise<T>, maxRetries = 2): Promise<T> {
         metrics.fallbacks++;
         console.warn(`[reader] Primary RPC failed (${msg}), trying fallback`);
         iqlabs.setRpcUrl(FALLBACK_RPC);
-        activeRpc = FALLBACK_RPC;
         solConnection = new Connection(FALLBACK_RPC);
         try {
           return await fn();
         } finally {
           iqlabs.setRpcUrl(PRIMARY_RPC);
-          activeRpc = PRIMARY_RPC;
           solConnection = new Connection(PRIMARY_RPC);
         }
       }
@@ -159,12 +156,10 @@ export async function readUserState(userPubkey: string) {
   return withRetry(() => iqlabs.reader.readUserState(userPubkey));
 }
 
-// 'medium' speed balances latency vs RPC call count — 'fast' hammers the RPC, 'slow' is too laggy for UI
 export async function fetchUserConnections(userPubkey: string) {
   return withRetry(() => iqlabs.reader.fetchUserConnections(userPubkey, { speed: 'medium' }));
 }
 
-// Fetches recent signatures for a table PDA. Tries Helius first if available.
 export async function fetchRecentSignatures(
   tablePda: string,
   limit = 50,
@@ -181,15 +176,13 @@ export async function fetchRecentSignatures(
   }
 
   return withRetry(async () => {
-    const pk = new PublicKey(tablePda);
-    const opts: { limit: number; before?: string } = { limit };
-    if (before) opts.before = before;
-    const sigs = await solConnection.getSignaturesForAddress(pk, opts);
+    const sigs = await solConnection.getSignaturesForAddress(
+      new PublicKey(tablePda), { limit, ...(before && { before }) },
+    );
     return sigs.map((s: { signature: string }) => s.signature);
   });
 }
 
-// Convert {data, metadata} from readCodeIn into a row object with __txSignature.
 function formatRow(sig: string, data: string | null, metadata: string): Record<string, unknown> {
   if (!data) return { signature: sig, metadata, data: null };
   try {
@@ -201,7 +194,6 @@ function formatRow(sig: string, data: string | null, metadata: string): Record<s
   return { signature: sig, metadata, data };
 }
 
-// Read a single row by transaction signature. Returns null for non-row txs.
 export async function readSingleRow(sig: string): Promise<Record<string, unknown> | null> {
   return withRetry(async () => {
     try {
@@ -216,23 +208,49 @@ export async function readSingleRow(sig: string): Promise<Record<string, unknown
   });
 }
 
-// Parse a pre-fetched transaction into a row. Skips the getTransaction RPC call.
-async function parseTransactionToRow(
-  sig: string,
-  tx: VersionedTransactionResponse,
-): Promise<Record<string, unknown> | null> {
-  try {
-    const { data, metadata } = await reader.readUserInventoryCodeInFromTx(tx);
-    return formatRow(sig, data, metadata);
-  } catch (err) {
-    if (err instanceof Error && err.message.includes("instruction not found")) {
-      return null;
-    }
-    throw err;
+// Decode code_in instructions from raw Helius batch JSON (no web3.js class methods).
+
+const PROGRAM_ID_B58 = "9KLLchQVJpGkw4jPuUmnvqESdR7mtNCYr3qS4iQLabs";
+const idl = require("@iqlabs-official/solana-sdk/idl/code_in.json");
+const instructionCoder = new BorshInstructionCoder(idl);
+const CODE_IN_NAMES = new Set([
+  "user_inventory_code_in", "user_inventory_code_in_for_free",
+  "db_code_in", "db_instruction_code_in", "wallet_connection_code_in",
+]);
+
+function decodeRawTxRow(sig: string, raw: any): Record<string, unknown> | null {
+  if (!raw?.transaction?.message) return null;
+  const msg = raw.transaction.message;
+  const accountKeys: string[] = msg.accountKeys
+    ? (typeof msg.accountKeys[0] === "string" ? msg.accountKeys : msg.accountKeys.map((k: any) => k.pubkey ?? k))
+    : [];
+  const ixs: Array<{ programIdIndex: number; data: string }> =
+    msg.instructions ?? msg.compiledInstructions ?? [];
+
+  for (const ix of ixs) {
+    if (accountKeys[ix.programIdIndex] !== PROGRAM_ID_B58) continue;
+    const decoded = instructionCoder.decode(Buffer.from(ix.data, "base58"));
+    if (!decoded || !CODE_IN_NAMES.has(decoded.name)) continue;
+
+    const d = decoded.data as { on_chain_path?: string; metadata?: string };
+    const onChainPath = d.on_chain_path ?? "";
+    const metadata = d.metadata ?? "";
+
+    // Session/linked-list posts need full SDK decode
+    if (onChainPath.length > 0) return null;
+
+    try {
+      const parsed = JSON.parse(metadata);
+      if (parsed?.data) {
+        const rowData = typeof parsed.data === "string" ? parsed.data : JSON.stringify(parsed.data);
+        return formatRow(sig, rowData, metadata);
+      }
+    } catch {}
+    return formatRow(sig, null, metadata);
   }
+  return null;
 }
 
-// Fetch the full signature index for a table PDA. Tries Helius first if available.
 export async function fetchSignatureIndex(
   tablePda: string,
   maxSignatures = 10000,
@@ -257,41 +275,41 @@ export async function readRowsBySignatures(
   return withRetry(() => iqlabs.reader.readTableRows(tablePda ?? signatures[0], { signatures }));
 }
 
-// Fetch and parse multiple rows in parallel.
-// Tries Helius JSON-RPC batching first (single HTTP POST, requires paid plan).
-// Falls back to parallel readSingleRow with concurrency scaled by RPC capacity.
 export async function readMultipleRows(
   signatures: string[],
 ): Promise<Map<string, Record<string, unknown> | null>> {
   const results = new Map<string, Record<string, unknown> | null>();
   if (signatures.length === 0) return results;
 
-  // Try batch fetch (single HTTP call for all transactions)
+  const needsFullDecode: string[] = [];
+
   if (isHeliusEnabled()) {
     metrics.heliusCalls++;
     metrics.totalCalls++;
     try {
       const txMap = await heliusBatchGetTransactions(signatures);
-      const settled = await Promise.allSettled(
-        signatures.map(async (sig) => {
-          const tx = txMap.get(sig);
-          if (!tx) return { sig, row: null as Record<string, unknown> | null };
-          const row = await parseTransactionToRow(sig, tx);
-          return { sig, row };
-        }),
-      );
-      for (const r of settled) {
-        if (r.status === "fulfilled") results.set(r.value.sig, r.value.row);
+      for (const sig of signatures) {
+        const raw = txMap.get(sig);
+        if (!raw) { results.set(sig, null); continue; }
+        const row = decodeRawTxRow(sig, raw);
+        if (row) {
+          results.set(sig, row);
+        } else {
+          // null = non-row tx or session/linked-list — try full SDK decode
+          needsFullDecode.push(sig);
+        }
       }
-      return results;
     } catch {
-      // Batch not available (free plan) — fall through to parallel individual fetches
+      needsFullDecode.push(...signatures.filter(s => !results.has(s)));
     }
+  } else {
+    needsFullDecode.push(...signatures);
   }
 
+  // Fall back to readSingleRow for anything the batch couldn't decode
   const CONCURRENCY = isHeliusEnabled() ? 20 : 5;
-  for (let i = 0; i < signatures.length; i += CONCURRENCY) {
-    const chunk = signatures.slice(i, i + CONCURRENCY);
+  for (let i = 0; i < needsFullDecode.length; i += CONCURRENCY) {
+    const chunk = needsFullDecode.slice(i, i + CONCURRENCY);
     const settled = await Promise.allSettled(
       chunk.map(async (sig) => ({ sig, row: await readSingleRow(sig) })),
     );

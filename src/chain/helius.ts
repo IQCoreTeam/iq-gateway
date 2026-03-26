@@ -124,7 +124,8 @@ export async function heliusGetSignatures(
     method: "getSignaturesForAddress",
     params: [address, { limit, ...(before && { before }) }],
   });
-  return (json.result || []).map((s: { signature: string }) => s.signature);
+  const sigs = (json.result || []).map((s: { signature: string }) => s.signature);
+  return sigs;
 }
 
 export async function heliusGetAllSignatures(
