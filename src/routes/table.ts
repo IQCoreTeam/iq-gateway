@@ -2,6 +2,7 @@ import { Hono } from "hono";
 import { Connection, PublicKey } from "@solana/web3.js";
 import { BorshAccountsCoder } from "@coral-xyz/anchor";
 import { createHash } from "node:crypto";
+import iqlabs from "@iqlabs-official/solana-sdk";
 import { fetchSignatureIndex, readRowsBySignatures, fetchRecentSignatures, readMultipleRows, readSingleRow } from "../chain";
 import { MemoryCache, TTL, getDiskCache, setDiskCache, deduped } from "../cache";
 
@@ -425,6 +426,80 @@ tableRouter.get("/:tablePda/meta", async (c) => {
     return c.json(meta);
   } catch (e) {
     return c.json({ error: "failed to decode table" }, 500);
+  }
+});
+
+// ─── /dbroot ─────────────────────────────────────────────────────────────────
+// Returns table_seeds, global_table_seeds, creator, and table_creators from the
+// on-chain DbRoot account. Cached 5 min. Eliminates direct RPC from the frontend.
+
+const dbrootCache = new MemoryCache<string>(10);
+const DBROOT_TTL = 5 * 60 * 1000;
+
+const DB_ROOT_ID = "iqchan";
+
+tableRouter.get("/dbroot", async (c) => {
+  const key = "dbroot:" + DB_ROOT_ID;
+  const cached = dbrootCache.get(key);
+  if (cached) return c.json(JSON.parse(cached));
+
+  try {
+    const dbRootSeed = iqlabs.utils.toSeedBytes(DB_ROOT_ID);
+    const dbRootKey = iqlabs.contract.getDbRootPda(Buffer.from(dbRootSeed));
+
+    const info = await metaRpc.getAccountInfo(dbRootKey);
+    if (!info) return c.json({ error: "DbRoot not found" }, 404);
+
+    const decoded = accountCoder.decode("DbRoot", info.data) as any;
+
+    const toHex = (v: any): string => {
+      if (v instanceof Uint8Array) return Buffer.from(v).toString("hex");
+      if (Array.isArray(v)) return Buffer.from(v).toString("hex");
+      if (v?.data && Array.isArray(v.data)) return Buffer.from(v.data).toString("hex");
+      return "";
+    };
+
+    const rawTableSeeds = decoded.table_seeds ?? decoded.tableSeeds ?? [];
+    const rawGlobalSeeds = decoded.global_table_seeds ?? decoded.globalTableSeeds ?? [];
+    const rawCreators = decoded.table_creators ?? [];
+
+    const globalHexes = rawGlobalSeeds.map(toHex);
+
+    // Batch-fetch table names for all global seeds (server-side, avoids N client requests)
+    const tableNames: Record<string, string> = {};
+    await Promise.allSettled(
+      globalHexes.map(async (hex: string) => {
+        try {
+          const seedBytes = Buffer.from(hex, "hex");
+          const tablePda = iqlabs.contract.getTablePda(dbRootKey, seedBytes);
+          const tInfo = await metaRpc.getAccountInfo(tablePda);
+          if (tInfo) {
+            const tDecoded = accountCoder.decode("Table", tInfo.data) as any;
+            const raw = tDecoded.name;
+            const toBuf = (v: any) => Buffer.isBuffer(v) ? v : Buffer.from(v?.data ?? v ?? []);
+            const name = toBuf(raw).toString("utf8").replace(/\0/g, "");
+            if (name) tableNames[hex] = name;
+          }
+        } catch { /* not a valid table account */ }
+      }),
+    );
+
+    const result = {
+      creator: decoded.creator ? new PublicKey(decoded.creator).toBase58() : null,
+      tableSeeds: rawTableSeeds.map(toHex),
+      globalTableSeeds: globalHexes,
+      tableCreators: rawCreators.map((pk: any) =>
+        pk instanceof PublicKey ? pk.toBase58() : new PublicKey(pk).toBase58()
+      ),
+      tableNames,
+    };
+
+    const json = JSON.stringify(result);
+    dbrootCache.set(key, json, DBROOT_TTL);
+    return c.json(result);
+  } catch (e) {
+    console.error("[dbroot] failed:", e instanceof Error ? e.message : e);
+    return c.json({ error: "failed to read DbRoot" }, 500);
   }
 });
 
