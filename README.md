@@ -64,7 +64,9 @@ That's it. Your gateway is live at `http://localhost:3000`.
 | `GET /table/{pda}/rows` | Read table rows with pagination |
 | `GET /table/{pda}/index` | Full signature index for a table |
 | `GET /table/{pda}/slice` | Read specific rows by signature |
+| `GET /table/{pda}/meta` | Table metadata (name, columns, gate config) |
 | `POST /table/{pda}/notify` | Notify about a new tx for instant cache injection |
+| `GET /table/dbroot` | DB root info (tables, creators) |
 | `GET /table/cache/stats` | Cache statistics |
 
 ### Users
@@ -75,6 +77,7 @@ That's it. Your gateway is live at `http://localhost:3000`.
 | `GET /user/{pubkey}/sessions` | List user sessions |
 | `GET /user/{pubkey}/profile` | User profile data |
 | `GET /user/{pubkey}/state` | User state |
+| `GET /user/{pubkey}/state` | Raw user state account |
 | `GET /user/{pubkey}/connections` | User connections |
 
 ### Site Hosting (Solana Permanent Web)
