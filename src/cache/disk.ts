@@ -15,10 +15,10 @@ function hashKey(key: string): string {
   return createHash("sha256").update(key).digest("hex").slice(0, 16);
 }
 
-// Disk TTLs: user state and rows expire; images and immutable meta persist
+// Disk cache is permanent for immutable on-chain data (rows, meta, img).
+// User data is mutable (profile updates, connections) so it still expires.
 const DISK_TTL: Partial<Record<string, number>> = {
-  user: 2 * 60 * 1000,    // 2 minutes (same as memory)
-  rows: 5 * 60 * 1000,    // 5 minutes (same as memory)
+  user: 2 * 60 * 1000,    // 2 minutes — mutable profile/connection data
 };
 
 export async function getDiskCache(
