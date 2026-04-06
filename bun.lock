@@ -6,7 +6,7 @@
       "name": "iq-gateway",
       "dependencies": {
         "@coral-xyz/anchor": "^0.32.1",
-        "@iqlabs-official/solana-sdk": "^0.1.14",
+        "@iqlabs-official/solana-sdk": "^0.1.20",
         "@metaplex-foundation/mpl-token-metadata": "^3.4.0",
         "@metaplex-foundation/umi": "^1.4.1",
         "@metaplex-foundation/umi-bundle-defaults": "^1.4.1",
@@ -31,7 +31,7 @@
 
     "@coral-xyz/borsh": ["@coral-xyz/borsh@0.31.1", "", { "dependencies": { "bn.js": "^5.1.2", "buffer-layout": "^1.2.0" }, "peerDependencies": { "@solana/web3.js": "^1.69.0" } }, "sha512-9N8AU9F0ubriKfNE3g1WF0/4dtlGXoBN/hd1PvbNBamBNwRgHxH4P+o3Zt7rSEloW1HUs6LfZEchlx9fW7POYw=="],
 
-    "@iqlabs-official/solana-sdk": ["@iqlabs-official/solana-sdk@0.1.14", "", { "dependencies": { "@coral-xyz/anchor": "^0.32.1", "@noble/curves": "^2.0.1", "@noble/hashes": "^1.8.0", "@solana/web3.js": "^1.98.0" } }, "sha512-24c3DZMLxdD2sCgOUQqqlVuBA5Yjwq7JqhARCZhPfiADiCBep6XfBxKZ3yj8uPRJ5LHmSiiIM6RXAoWyBwDPzw=="],
+    "@iqlabs-official/solana-sdk": ["@iqlabs-official/solana-sdk@0.1.20", "", { "dependencies": { "@coral-xyz/anchor": "^0.32.1", "@noble/curves": "^2.0.1", "@noble/hashes": "^1.8.0", "@solana/web3.js": "^1.98.0" } }, "sha512-XW6bnberjEcEK0xXw91jjgFyRU5n62BqVWerZHgcUeSbO+GlPE2roSaV3GKsYz7252R5WKCf554QIxKxTOXcQQ=="],
 
     "@metaplex-foundation/mpl-token-metadata": ["@metaplex-foundation/mpl-token-metadata@3.4.0", "", { "dependencies": { "@metaplex-foundation/mpl-toolbox": "^0.10.0" }, "peerDependencies": { "@metaplex-foundation/umi": ">= 0.8.2 <= 1" } }, "sha512-AxBAYCK73JWxY3g9//z/C9krkR0t1orXZDknUPS4+GjwGH2vgPfsk04yfZ31Htka2AdS9YE/3wH7sMUBHKn9Rg=="],
 

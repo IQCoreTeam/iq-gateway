@@ -17,9 +17,9 @@ let decode58: (s: string) => Uint8Array;
 async function initDecoder() {
   if (coder) return;
   const { BorshInstructionCoder } = await import("@coral-xyz/anchor");
-  const IDL = (await import("@iqlabs-official/solana-sdk/idl/code_in.json")).default;
+  const { contract } = await import("@iqlabs-official/solana-sdk");
   const bs58 = await import("bs58");
-  coder = new BorshInstructionCoder(IDL as any);
+  coder = new BorshInstructionCoder(contract.IQ_IDL as any);
   decode58 = (bs58 as any).decode ?? (bs58 as any).default?.decode;
 }
 

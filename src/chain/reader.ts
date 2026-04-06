@@ -211,8 +211,8 @@ export async function readSingleRow(sig: string): Promise<Record<string, unknown
 // Decode code_in instructions from raw Helius batch JSON (no web3.js class methods).
 
 const PROGRAM_ID_B58 = "9KLLchQVJpGkw4jPuUmnvqESdR7mtNCYr3qS4iQLabs";
-const idl = require("@iqlabs-official/solana-sdk/idl/code_in.json");
-const instructionCoder = new BorshInstructionCoder(idl);
+import { contract } from "@iqlabs-official/solana-sdk";
+const instructionCoder = new BorshInstructionCoder(contract.IQ_IDL);
 const CODE_IN_NAMES = new Set([
   "user_inventory_code_in", "user_inventory_code_in_for_free",
   "db_code_in", "db_instruction_code_in", "wallet_connection_code_in",

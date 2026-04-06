@@ -386,8 +386,8 @@ tableRouter.post("/:tablePda/notify", async (c) => {
 const metaCache = new MemoryCache<string>(200);
 const META_TTL = 5 * 60 * 1000; // 5 min — table metadata rarely changes
 
-const idl = require("@iqlabs-official/solana-sdk/idl/code_in.json");
-const accountCoder = new BorshAccountsCoder(idl);
+import { contract } from "@iqlabs-official/solana-sdk";
+const accountCoder = new BorshAccountsCoder(contract.IQ_IDL);
 const metaRpc = new Connection(
   process.env.SOLANA_RPC_ENDPOINT || "https://api.mainnet-beta.solana.com",
 );
