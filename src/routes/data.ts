@@ -30,8 +30,8 @@ dataRouter.get("/:sig", async (c) => {
   // L3: Fetch from chain (deduplicated)
   try {
     const result = await deduped(inflight, cacheKey, async () => {
-      const { data, metadata } = await readAsset(sig);
-      return JSON.stringify({ data, metadata, signature: sig });
+      const { data, metadata, signer, blockTime, slot } = await readAsset(sig);
+      return JSON.stringify({ data, metadata, signature: sig, signer, blockTime, slot });
     });
 
     dataCache.set(cacheKey, result, TTL.META_IMMUTABLE);

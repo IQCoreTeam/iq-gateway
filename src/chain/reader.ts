@@ -141,7 +141,20 @@ export function detectImageType(buf: Buffer): string | null {
 }
 
 export async function readAsset(txSig: string) {
-  return withRetry(() => iqlabs.reader.readCodeIn(txSig));
+  const tx = await withRetry(() =>
+    solConnection.getTransaction(txSig, { maxSupportedTransactionVersion: 0 }),
+  );
+  if (!tx) throw new Error("transaction not found");
+
+  const result = await iqlabs.reader.readUserInventoryCodeInFromTx(tx);
+  const signer = tx.transaction.message.getAccountKeys().get(0)?.toBase58();
+
+  return {
+    ...result,
+    signer,
+    blockTime: tx.blockTime ?? null,
+    slot: tx.slot,
+  };
 }
 
 export async function listUserAssets(userPubkey: string, limit = 20, before?: string) {
