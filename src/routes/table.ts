@@ -5,6 +5,7 @@ import { createHash } from "node:crypto";
 import iqlabs from "@iqlabs-official/solana-sdk";
 import { fetchSignatureIndex, readRowsBySignatures, fetchRecentSignatures, readMultipleRows, readSingleRow } from "../chain";
 import { MemoryCache, TTL, getDiskCache, setDiskCache, deduped } from "../cache";
+import { invalidateUserAssets } from "./user";
 
 export const tableRouter = new Hono();
 
@@ -326,6 +327,11 @@ tableRouter.post("/:tablePda/notify", async (c) => {
   const body = await c.req.json().catch(() => null);
   const txSig = body?.txSignature;
   const rowData = body?.row;
+  const signer = body?.signer;
+
+  // Drop the writer's cached assets list so their next /user/.../assets
+  // call returns the new note instead of stale cache.
+  if (typeof signer === "string") invalidateUserAssets(signer);
 
   if (!txSig || typeof txSig !== "string") {
     return c.json({ error: "txSignature required" }, 400);

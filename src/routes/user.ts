@@ -14,6 +14,14 @@ const SESSIONS_TTL = 5 * 60 * 1000; // 5 min — sessions rarely change
 
 const inflight = new Map<string, Promise<string>>();
 
+// Called by /table/:pda/notify so a freshly-written row appears in the
+// owner's assets list immediately, without bypassing cache for everyone.
+export function invalidateUserAssets(pubkey: string) {
+  for (const key of assetsCache.keys()) {
+    if (key.startsWith(`assets:${pubkey}:`)) assetsCache.delete(key);
+  }
+}
+
 // ─── GET /user/:pubkey/assets ────────────────────────────────────────────────
 
 userRouter.get("/:pubkey/assets", async (c) => {
