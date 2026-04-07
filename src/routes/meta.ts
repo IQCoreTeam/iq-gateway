@@ -51,6 +51,8 @@ metaRouter.get("/:sig", async (c) => {
     }
   }
 
+  if (!raw) return c.json({ error: "not found" }, 404);
+
   // Build URLs dynamically
   const proto = c.req.header("X-Forwarded-Proto") || "http";
   const host = c.req.header("Host") || "localhost:3000";
