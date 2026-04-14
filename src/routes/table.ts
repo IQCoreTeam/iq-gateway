@@ -392,7 +392,7 @@ tableRouter.post("/:tablePda/notify", async (c) => {
 const metaCache = new MemoryCache<string>(200);
 const META_TTL = 5 * 60 * 1000; // 5 min — table metadata rarely changes
 
-import { contract } from "@iqlabs-official/solana-sdk";
+import { contract, reader as sdkReader } from "@iqlabs-official/solana-sdk";
 const accountCoder = new BorshAccountsCoder(contract.IQ_IDL);
 const metaRpc = new Connection(
   process.env.SOLANA_RPC_ENDPOINT || "https://api.mainnet-beta.solana.com",
@@ -409,21 +409,18 @@ tableRouter.get("/:tablePda/meta", async (c) => {
     const info = await metaRpc.getAccountInfo(new PublicKey(tablePda));
     if (!info) return c.json({ error: "account not found" }, 404);
 
-    const decoded = accountCoder.decode("Table", info.data) as any;
-    const g = decoded.gate;
-    const mint = g?.mint?.toBase58?.() ?? "";
-    const isGated = mint && mint !== "11111111111111111111111111111111";
-
-    const toBuf = (v: any) => Buffer.isBuffer(v) ? v : Buffer.from(v?.data ?? v ?? []);
+    const decoded = sdkReader.decodeTableMeta(info.data);
+    const mint = decoded.gate.mint.toBase58();
+    const isGated = mint !== "11111111111111111111111111111111";
 
     const meta = {
-      name: toBuf(decoded.name).toString("utf8").replace(/\0/g, ""),
-      columns: (decoded.column_names ?? []).map((c: any) => toBuf(c).toString("utf8")),
-      idCol: toBuf(decoded.id_col).toString("utf8"),
+      name: decoded.name,
+      columns: decoded.columns,
+      idCol: decoded.idCol,
       gate: isGated ? {
         mint,
-        amount: g.amount?.toNumber?.() ?? Number(g.amount) ?? 0,
-        gateType: g.gate_type ?? 0,
+        amount: decoded.gate.amount.toNumber(),
+        gateType: decoded.gate.gateType,
       } : null,
     };
 
