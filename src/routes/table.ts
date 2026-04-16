@@ -341,9 +341,15 @@ tableRouter.post("/:tablePda/notify", async (c) => {
     return c.json({ error: "invalid table PDA" }, 400);
   }
 
-  // Use row data from frontend if provided, otherwise try fetching from chain
+  // Use row data from frontend if provided, otherwise try fetching from chain.
+  // Client sends a top-level `signer` for user-asset invalidation — reuse it to
+  // stamp __signer on the row so clients don't have to populate it twice.
   const row = rowData
-    ? { ...rowData, __txSignature: txSig }
+    ? {
+        ...rowData,
+        __txSignature: txSig,
+        ...(typeof signer === "string" && !rowData.__signer ? { __signer: signer } : {}),
+      }
     : await readSingleRow(txSig).catch(() => null);
 
   if (!row) {

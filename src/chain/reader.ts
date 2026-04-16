@@ -196,22 +196,37 @@ export async function fetchRecentSignatures(
   });
 }
 
-function formatRow(sig: string, data: string | null, metadata: string): Record<string, unknown> {
-  if (!data) return { signature: sig, metadata, data: null };
-  try {
-    const parsed = JSON.parse(data);
-    if (parsed && typeof parsed === "object" && !Array.isArray(parsed)) {
-      return { ...parsed, __txSignature: sig };
-    }
-  } catch {}
-  return { signature: sig, metadata, data };
+function formatRow(
+  sig: string,
+  data: string | null,
+  metadata: string,
+  signer?: string,
+): Record<string, unknown> {
+  let row: Record<string, unknown>;
+  if (!data) {
+    row = { signature: sig, metadata, data: null };
+  } else {
+    let parsed: unknown;
+    try { parsed = JSON.parse(data); } catch {}
+    row = parsed && typeof parsed === "object" && !Array.isArray(parsed)
+      ? { ...(parsed as Record<string, unknown>), __txSignature: sig }
+      : { signature: sig, metadata, data };
+  }
+  if (signer) row.__signer = signer;
+  return row;
 }
 
 export async function readSingleRow(sig: string): Promise<Record<string, unknown> | null> {
   return withRetry(async () => {
     try {
-      const { data, metadata } = await iqlabs.reader.readCodeIn(sig);
-      return formatRow(sig, data, metadata);
+      // Fetch row data + tx in parallel — tx gives us the fee payer (signer)
+      // which the client wants for per-post wallet attribution.
+      const [{ data, metadata }, tx] = await Promise.all([
+        iqlabs.reader.readCodeIn(sig),
+        solConnection.getTransaction(sig, { maxSupportedTransactionVersion: 0 }),
+      ]);
+      const signer = tx?.transaction.message.getAccountKeys().get(0)?.toBase58();
+      return formatRow(sig, data, metadata, signer);
     } catch (err) {
       if (err instanceof Error && err.message.includes("instruction not found")) {
         return null;
@@ -237,6 +252,8 @@ function decodeRawTxRow(sig: string, raw: any): Record<string, unknown> | null {
   const accountKeys: string[] = msg.accountKeys
     ? (typeof msg.accountKeys[0] === "string" ? msg.accountKeys : msg.accountKeys.map((k: any) => k.pubkey ?? k))
     : [];
+  // Fee payer is always accountKeys[0] on both legacy + versioned messages.
+  const signer = accountKeys[0];
   const ixs: Array<{ programIdIndex: number; data: string }> =
     msg.instructions ?? msg.compiledInstructions ?? [];
 
@@ -256,10 +273,10 @@ function decodeRawTxRow(sig: string, raw: any): Record<string, unknown> | null {
       const parsed = JSON.parse(metadata);
       if (parsed?.data) {
         const rowData = typeof parsed.data === "string" ? parsed.data : JSON.stringify(parsed.data);
-        return formatRow(sig, rowData, metadata);
+        return formatRow(sig, rowData, metadata, signer);
       }
     } catch {}
-    return formatRow(sig, null, metadata);
+    return formatRow(sig, null, metadata, signer);
   }
   return null;
 }
