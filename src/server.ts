@@ -4,9 +4,10 @@ import { Hono } from "hono";
 import { cors } from "hono/cors";
 import { logger } from "hono/logger";
 import { serveStatic } from "hono/bun";
-import { metaRouter, imgRouter, viewRouter, renderRouter, healthRouter, userRouter, tableRouter, dataRouter, siteRouter } from "./routes";
+import { metaRouter, imgRouter, viewRouter, renderRouter, healthRouter, userRouter, tableRouter, dataRouter, siteRouter, gateRouter } from "./routes";
 import { serveSiteAsset } from "./routes/site";
 import { startBackfill } from "./backfill";
+import { openapiSpec } from "./openapi";
 import type { Context, Next } from "hono";
 
 const GENESIS_HASHES: Record<string, string> = {
@@ -66,6 +67,30 @@ app.route("/user", userRouter);
 app.route("/table", tableRouter);
 app.route("/data", dataRouter);
 app.route("/site", siteRouter);
+app.route("/gate", gateRouter);
+
+// OpenAPI spec + Swagger UI — loaded from CDN so no npm dep is needed.
+// /openapi.json is the machine-readable schema; /docs renders it interactively.
+app.get("/openapi.json", (c) => c.json(openapiSpec));
+app.get("/docs", (c) => c.html(`<!doctype html>
+<html>
+  <head>
+    <title>IQ Gateway API</title>
+    <link rel="stylesheet" href="https://unpkg.com/swagger-ui-dist@5/swagger-ui.css">
+  </head>
+  <body>
+    <div id="swagger-ui"></div>
+    <script src="https://unpkg.com/swagger-ui-dist@5/swagger-ui-bundle.js" crossorigin></script>
+    <script>
+      window.ui = SwaggerUIBundle({
+        url: "/openapi.json",
+        dom_id: "#swagger-ui",
+        deepLinking: true,
+        layout: "BaseLayout",
+      });
+    </script>
+  </body>
+</html>`));
 app.route("/", healthRouter);
 
 // Serve site assets for root-relative paths (e.g. /blockchan.webp, /_next/...)

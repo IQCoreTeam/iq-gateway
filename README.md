@@ -61,11 +61,13 @@ That's it. Your gateway is live at `http://localhost:3000`.
 
 | Endpoint | Description |
 |----------|-------------|
-| `GET /table/{pda}/rows` | Read table rows with pagination |
+| `GET /table/{pda}/rows` | Read table rows with pagination. Supports `If-None-Match` → `304 Not Modified` via weak ETag. Rows include `__txSignature`, `__signer` (fee payer), and `__blockTime` (chain-truth timestamp). |
 | `GET /table/{pda}/index` | Full signature index for a table |
 | `GET /table/{pda}/slice` | Read specific rows by signature |
 | `GET /table/{pda}/meta` | Table metadata (name, columns, gate config) |
-| `POST /table/{pda}/notify` | Notify about a new tx for instant cache injection |
+| `POST /table/{pda}/notify` | Notify about a new tx for instant cache injection. Also pushes to open SSE streams. |
+| `GET /table/{pda}/subscribe` | **Server-Sent Events stream.** Emits `event: hello` on connect, `event: row` on each `/notify`, `event: ping` every 30s. Clients use `new EventSource(...)` instead of polling. |
+| `GET /table/{feedPda}/thread/{threadPda}` | Resolved `{op, replies, totalReplies}` in one call. Server-side OP picker (prefers row with `sub`, tiebreak earliest time) removes the two-fetch + client-side OP-resolution pattern. |
 | `GET /table/dbroot` | DB root info (tables, creators) |
 | `GET /table/cache/stats` | Cache statistics |
 
@@ -76,9 +78,22 @@ That's it. Your gateway is live at `http://localhost:3000`.
 | `GET /user/{pubkey}/assets` | List assets uploaded by a wallet |
 | `GET /user/{pubkey}/sessions` | List user sessions |
 | `GET /user/{pubkey}/profile` | User profile data |
-| `GET /user/{pubkey}/state` | User state |
 | `GET /user/{pubkey}/state` | Raw user state account |
 | `GET /user/{pubkey}/connections` | User connections |
+| `GET /user/{pubkey}/posts` | Signatures this wallet has authored. **Opportunistic index** — populated at decode time, so coverage grows as the gateway serves traffic. `{pubkey, signatures, count, note}`. |
+
+### Gate Verification
+
+| Endpoint | Description |
+|----------|-------------|
+| `GET /gate/{tablePda}/check/{wallet}` | Server-side token-gate check. Returns `{sol, gate, tokenBalance, meetsGate, minSol}`. Replaces the client's `getBalance` + `getAccount` calls for gated-board UX. Cached 30 s. |
+
+### API Docs
+
+| Endpoint | Description |
+|----------|-------------|
+| `GET /openapi.json` | OpenAPI 3.0 schema for every endpoint |
+| `GET /docs` | Interactive Swagger UI (loaded from CDN, no npm dep) |
 
 ### Site Hosting (Solana Permanent Web)
 

@@ -1,5 +1,5 @@
 import { Hono } from "hono";
-import { listUserAssets, listUserSessions, readUserState, fetchUserConnections } from "../chain";
+import { listUserAssets, listUserSessions, readUserState, fetchUserConnections, getSignerSigs } from "../chain";
 import { MemoryCache, userStateCache, TTL, getDiskCache, setDiskCache, deduped } from "../cache";
 
 export const userRouter = new Hono();
@@ -155,6 +155,19 @@ userRouter.get("/:pubkey/state", async (c) => {
   } catch {
     return c.json({ error: "failed to fetch state" }, 500);
   }
+});
+
+// ─── GET /user/:pubkey/posts ────────────────────────────────────────────────
+// Opportunistic reverse index: signer → [txSignature, ...] populated as the
+// gateway decodes rows (see chain/signer-index.ts). Does not back-scan the
+// chain, so this returns what we've observed since index creation. Clients
+// should treat the result as "known so far" and not "all posts ever".
+
+userRouter.get("/:pubkey/posts", async (c) => {
+  const pubkey = c.req.param("pubkey");
+  const limit = Math.min(Number(c.req.query("limit")) || 100, 500);
+  const sigs = await getSignerSigs(pubkey, limit);
+  return c.json({ pubkey, signatures: sigs, count: sigs.length, note: "opportunistic index" });
 });
 
 // ─── GET /user/:pubkey/connections ──────────────────────────────────────────

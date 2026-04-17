@@ -201,6 +201,7 @@ function formatRow(
   data: string | null,
   metadata: string,
   signer?: string,
+  blockTime?: number,
 ): Record<string, unknown> {
   let row: Record<string, unknown>;
   if (!data) {
@@ -213,20 +214,47 @@ function formatRow(
       : { signature: sig, metadata, data };
   }
   if (signer) row.__signer = signer;
+  if (typeof blockTime === "number") row.__blockTime = blockTime;
+  // Index the signer→sig mapping here so every formatted row gets recorded
+  // regardless of which decode path produced it. Cheap (memory + disk).
+  if (signer) recordSignerSig(signer, sig);
   return row;
 }
 
-export async function readSingleRow(sig: string): Promise<Record<string, unknown> | null> {
+/**
+ * Extracts fee-payer + block time from a Helius raw tx JSON (no web3.js classes).
+ * Used by both decodeRawTxRow and readMultipleRows' fallback path so the two
+ * decoders share one normalization.
+ */
+function extractRawTxMeta(raw: any): { signer?: string; blockTime?: number; accountKeys: string[] } {
+  const msg = raw?.transaction?.message;
+  const accountKeys: string[] = msg?.accountKeys
+    ? (typeof msg.accountKeys[0] === "string" ? msg.accountKeys : msg.accountKeys.map((k: any) => k.pubkey ?? k))
+    : [];
+  return {
+    signer: accountKeys[0],
+    blockTime: typeof raw?.blockTime === "number" ? raw.blockTime : undefined,
+    accountKeys,
+  };
+}
+
+export async function readSingleRow(
+  sig: string,
+  preloaded?: { signer?: string; blockTime?: number },
+): Promise<Record<string, unknown> | null> {
   return withRetry(async () => {
     try {
-      // Fetch row data + tx in parallel — tx gives us the fee payer (signer)
-      // which the client wants for per-post wallet attribution.
-      const [{ data, metadata }, tx] = await Promise.all([
+      // Skip getTransaction when the caller already pulled signer+blockTime from
+      // a Helius raw tx — kills one redundant RPC on the Helius-succeeded-but-
+      // undecodable path (see readMultipleRows fallback).
+      const needTx = !preloaded || preloaded.signer === undefined || preloaded.blockTime === undefined;
+      const [codeIn, tx] = await Promise.all([
         iqlabs.reader.readCodeIn(sig),
-        solConnection.getTransaction(sig, { maxSupportedTransactionVersion: 0 }),
+        needTx ? solConnection.getTransaction(sig, { maxSupportedTransactionVersion: 0 }) : Promise.resolve(null),
       ]);
-      const signer = tx?.transaction.message.getAccountKeys().get(0)?.toBase58();
-      return formatRow(sig, data, metadata, signer);
+      const signer = preloaded?.signer ?? tx?.transaction.message.getAccountKeys().get(0)?.toBase58();
+      const blockTime = preloaded?.blockTime ?? (tx?.blockTime ?? undefined);
+      return formatRow(sig, codeIn.data, codeIn.metadata, signer, blockTime);
     } catch (err) {
       if (err instanceof Error && err.message.includes("instruction not found")) {
         return null;
@@ -240,20 +268,21 @@ export async function readSingleRow(sig: string): Promise<Record<string, unknown
 
 const PROGRAM_ID_B58 = "9KLLchQVJpGkw4jPuUmnvqESdR7mtNCYr3qS4iQLabs";
 import { contract } from "@iqlabs-official/solana-sdk";
+import { recordSignerSig } from "./signer-index";
 const instructionCoder = new BorshInstructionCoder(contract.IQ_IDL);
 const CODE_IN_NAMES = new Set([
   "user_inventory_code_in", "user_inventory_code_in_for_free",
   "db_code_in", "db_instruction_code_in", "wallet_connection_code_in",
 ]);
 
-function decodeRawTxRow(sig: string, raw: any): Record<string, unknown> | null {
+function decodeRawTxRow(
+  sig: string,
+  raw: any,
+  meta: { signer?: string; blockTime?: number; accountKeys: string[] },
+): Record<string, unknown> | null {
   if (!raw?.transaction?.message) return null;
+  const { signer, blockTime, accountKeys } = meta;
   const msg = raw.transaction.message;
-  const accountKeys: string[] = msg.accountKeys
-    ? (typeof msg.accountKeys[0] === "string" ? msg.accountKeys : msg.accountKeys.map((k: any) => k.pubkey ?? k))
-    : [];
-  // Fee payer is always accountKeys[0] on both legacy + versioned messages.
-  const signer = accountKeys[0];
   const ixs: Array<{ programIdIndex: number; data: string }> =
     msg.instructions ?? msg.compiledInstructions ?? [];
 
@@ -273,10 +302,10 @@ function decodeRawTxRow(sig: string, raw: any): Record<string, unknown> | null {
       const parsed = JSON.parse(metadata);
       if (parsed?.data) {
         const rowData = typeof parsed.data === "string" ? parsed.data : JSON.stringify(parsed.data);
-        return formatRow(sig, rowData, metadata, signer);
+        return formatRow(sig, rowData, metadata, signer, blockTime);
       }
     } catch {}
-    return formatRow(sig, null, metadata, signer);
+    return formatRow(sig, null, metadata, signer, blockTime);
   }
   return null;
 }
@@ -313,6 +342,10 @@ export async function readMultipleRows(
 
   const needsFullDecode: string[] = [];
 
+  // Keeps the Helius raw tx for sigs that couldn't fast-decode, so the
+  // SDK fallback can reuse signer+blockTime instead of refetching the tx.
+  const preloadMap = new Map<string, { signer?: string; blockTime?: number }>();
+
   if (isHeliusEnabled()) {
     metrics.heliusCalls++;
     metrics.totalCalls++;
@@ -321,11 +354,13 @@ export async function readMultipleRows(
       for (const sig of signatures) {
         const raw = txMap.get(sig);
         if (!raw) { results.set(sig, null); continue; }
-        const row = decodeRawTxRow(sig, raw);
+        const meta = extractRawTxMeta(raw);
+        const row = decodeRawTxRow(sig, raw, meta);
         if (row) {
           results.set(sig, row);
         } else {
           // null = non-row tx or session/linked-list — try full SDK decode
+          preloadMap.set(sig, { signer: meta.signer, blockTime: meta.blockTime });
           needsFullDecode.push(sig);
         }
       }
@@ -341,7 +376,7 @@ export async function readMultipleRows(
   for (let i = 0; i < needsFullDecode.length; i += CONCURRENCY) {
     const chunk = needsFullDecode.slice(i, i + CONCURRENCY);
     const settled = await Promise.allSettled(
-      chunk.map(async (sig) => ({ sig, row: await readSingleRow(sig) })),
+      chunk.map(async (sig) => ({ sig, row: await readSingleRow(sig, preloadMap.get(sig)) })),
     );
     for (let j = 0; j < settled.length; j++) {
       const r = settled[j];
