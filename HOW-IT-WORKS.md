@@ -177,7 +177,6 @@ Traefik issues per-host Let's Encrypt certificates via TLS-ALPN-01 on first hit.
 
 ## Branches
 
-- `nubs-sol-site` — Phase 1 (manual env-var host-map). Superseded.
 - `sns` — path-based `/sns/<domain>` resolver. Live in production.
 - `sns-host-based` — `*.sol.site` host middleware on top of `sns`. Currently deployed.
 
