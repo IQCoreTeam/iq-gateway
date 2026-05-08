@@ -1,5 +1,6 @@
 import { Hono } from "hono";
 import { metaCache, imageCache, userStateCache } from "../cache/memory";
+import { snsCache, snsInflight } from "../chain/sns";
 import { getStats } from "../cache/store";
 import { getRpcMetrics } from "../chain";
 import { rowsCache, indexCache, sliceCache, inflight } from "./table";
@@ -33,6 +34,8 @@ healthRouter.get("/health", async (c) => {
         tableIndex: indexCache.size(),
         tableSlice: sliceCache.size(),
         inflightReads: inflight.size,
+        sns: snsCache.size(),
+        snsInflight: snsInflight.size,
       },
       disk: {
         entries: diskStats.entryCount,

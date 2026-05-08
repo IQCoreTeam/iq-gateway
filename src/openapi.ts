@@ -314,6 +314,32 @@ export const openapiSpec = {
         responses: { 200: { description: "File content" } },
       },
     },
+    "/sns/{domain}": {
+      get: {
+        tags: ["site"],
+        summary: "Resolve a SNS domain → 302 to its IQ manifest",
+        description: "Reads the TXT or Url V2 record on `<domain>.sol`. If the record value is a Solana tx signature (or wraps one inside a /site/<sig>/ URL), returns 302 to /site/<sig>/. Otherwise 404.",
+        parameters: [{ name: "domain", in: "path", required: true, schema: { type: "string" } }],
+        responses: {
+          302: { description: "Redirect to /site/<sig>/" },
+          404: { description: "No IQ record on the domain" },
+        },
+      },
+    },
+    "/sns/{domain}/{path}": {
+      get: {
+        tags: ["site"],
+        summary: "Same as /sns/{domain}, but redirect to a sub-path of the manifest",
+        parameters: [
+          { name: "domain", in: "path", required: true, schema: { type: "string" } },
+          { name: "path", in: "path", required: true, schema: { type: "string" } },
+        ],
+        responses: {
+          302: { description: "Redirect to /site/<sig>/<path>" },
+          404: { description: "No IQ record on the domain" },
+        },
+      },
+    },
     "/health": {
       get: { tags: ["system"], summary: "Health + cache + RPC metrics", responses: { 200: { description: "ok" } } },
     },

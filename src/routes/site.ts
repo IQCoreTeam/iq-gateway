@@ -1,22 +1,13 @@
 import { Hono } from "hono";
 import { readAsset, decodeAssetData, generateETag } from "../chain";
 import { MemoryCache, TTL, getDiskCache, setDiskCache } from "../cache";
-import { existsSync, readFileSync, writeFileSync } from "node:fs";
-import { join } from "node:path";
 
 export const siteRouter = new Hono();
 
 const manifestCache = new MemoryCache<string>(200);
 const fileCache = new MemoryCache<Buffer>(500);
 
-// Persist active manifest across restarts
-const ACTIVE_MANIFEST_PATH = join(process.env.CACHE_DIR || "./cache", "active-manifest.txt");
-let activeManifestSig: string | null = (() => {
-  try { return existsSync(ACTIVE_MANIFEST_PATH) ? readFileSync(ACTIVE_MANIFEST_PATH, "utf-8").trim() : null; }
-  catch { return null; }
-})();
-
-// Sequential read queue to avoid RPC rate limits
+// Sequential read queue to avoid RPC rate limits.
 let readQueue: Promise<void> = Promise.resolve();
 function enqueueRead<T>(fn: () => Promise<T>): Promise<T> {
   const result = readQueue.then(fn, fn);
@@ -24,20 +15,19 @@ function enqueueRead<T>(fn: () => Promise<T>): Promise<T> {
   return result;
 }
 
-// Normalized internal format
-interface Manifest {
+// Normalized internal manifest format.
+export interface Manifest {
   indexPath: string;
-  files: Record<string, string>; // path → txId
+  files: Record<string, string>; // path -> txId
 }
 
 // Gateway format: { index: { path }, paths: { file: { id } } }
 // Iqoogle format: { "file": { txId, hash } }
-function parseManifest(raw: Record<string, unknown>): Manifest {
+export function parseManifest(raw: Record<string, unknown>): Manifest {
   const files: Record<string, string> = {};
   let indexPath = "index.html";
 
   if (raw.paths && typeof raw.paths === "object") {
-    // Gateway format
     const paths = raw.paths as Record<string, { id: string }>;
     for (const [p, entry] of Object.entries(paths)) {
       if (entry?.id) files[p] = entry.id;
@@ -46,7 +36,6 @@ function parseManifest(raw: Record<string, unknown>): Manifest {
       indexPath = (raw.index as { path: string }).path;
     }
   } else {
-    // Iqoogle format: top-level keys are paths, values have txId
     for (const [p, entry] of Object.entries(raw)) {
       if (entry && typeof entry === "object" && (entry as { txId?: string }).txId) {
         files[p] = (entry as { txId: string }).txId;
@@ -102,7 +91,6 @@ async function fetchManifest(sig: string): Promise<Manifest> {
     return JSON.parse(text) as Manifest;
   }
 
-  // Check backfill cache
   const backfillData = await getDiskCache("meta", `data:${sig}`);
   if (backfillData) {
     try {
@@ -145,14 +133,12 @@ async function fetchFile(sig: string): Promise<Buffer> {
   const cached = fileCache.get(key);
   if (cached) return cached;
 
-  // Check site-file disk cache
   const disk = await getDiskCache("site-file", sig);
   if (disk) {
     fileCache.set(key, disk, TTL.IMAGE);
     return disk;
   }
 
-  // Check backfill cache (stored under data: prefix by backfill.ts)
   const backfillData = await getDiskCache("meta", `data:${sig}`);
   if (backfillData) {
     try {
@@ -166,7 +152,6 @@ async function fetchFile(sig: string): Promise<Buffer> {
     } catch {}
   }
 
-  // Queue chain reads to avoid RPC rate limits
   return enqueueRead(async () => {
     const rechecked = fileCache.get(key);
     if (rechecked) return rechecked;
@@ -181,8 +166,7 @@ async function fetchFile(sig: string): Promise<Buffer> {
   });
 }
 
-// Build a file response with correct MIME type, caching, and CORS
-function buildFileResponse(buf: Buffer, filePath: string): Response {
+export function buildFileResponse(buf: Buffer, filePath: string): Response {
   const mime = getMimeType(filePath);
   const isImmutable = !filePath.endsWith(".html") && !filePath.endsWith(".htm");
   return new Response(new Uint8Array(buf), {
@@ -198,16 +182,85 @@ function buildFileResponse(buf: Buffer, filePath: string): Response {
   });
 }
 
-// Resolve a file path against a manifest, returning txId or null
-function resolveFile(manifest: Manifest, filePath: string): string | null {
+export function resolveFile(manifest: Manifest, filePath: string): string | null {
   let p = filePath;
   if (!p || p === "/") p = manifest.indexPath;
   if (p.startsWith("/")) p = p.slice(1);
   return manifest.files[p] ?? null;
 }
 
-// GET /site/:manifestSig              → serves index
-// GET /site/:manifestSig/*path        → serves file at path
+// Request-scoped helper. No globals. Each call serves files from the manifest
+// passed in — never from any prior request's manifest.
+export async function serveManifestPath(input: {
+  manifestSig: string;
+  filePath: string;
+  indexPath?: string;
+  spaFallback?: boolean;
+  ifNoneMatch?: string | null;
+}): Promise<Response> {
+  const { manifestSig, filePath, indexPath, spaFallback, ifNoneMatch } = input;
+
+  let manifest: Manifest;
+  try {
+    manifest = await fetchManifest(manifestSig);
+  } catch (e) {
+    return new Response(
+      `manifest error: ${e instanceof Error ? e.message : "unknown"}`,
+      { status: 404, headers: { "Content-Type": "text/plain" } },
+    );
+  }
+
+  const effectiveIndex = indexPath ?? manifest.indexPath;
+  const lookupManifest: Manifest =
+    indexPath && indexPath !== manifest.indexPath
+      ? { ...manifest, indexPath: effectiveIndex }
+      : manifest;
+
+  const directTxId = resolveFile(lookupManifest, filePath);
+  let targetTxId: string | null = directTxId;
+  let servePath: string;
+  if (directTxId) {
+    servePath = filePath === "" || filePath === "/"
+      ? effectiveIndex
+      : (filePath.startsWith("/") ? filePath.slice(1) : filePath);
+  } else if (spaFallback) {
+    targetTxId = resolveFile(lookupManifest, effectiveIndex);
+    servePath = effectiveIndex;
+  } else {
+    return new Response("not found", {
+      status: 404,
+      headers: { "Content-Type": "text/plain" },
+    });
+  }
+
+  if (!targetTxId) {
+    return new Response("not found", {
+      status: 404,
+      headers: { "Content-Type": "text/plain" },
+    });
+  }
+
+  let buf: Buffer;
+  try {
+    buf = await fetchFile(targetTxId);
+  } catch (e) {
+    return new Response(
+      `file error: ${e instanceof Error ? e.message : "unknown"}`,
+      { status: 500, headers: { "Content-Type": "text/plain" } },
+    );
+  }
+
+  const res = buildFileResponse(buf, servePath);
+  const etag = res.headers.get("ETag");
+  if (etag && ifNoneMatch === etag) {
+    return new Response(null, { status: 304, headers: { ETag: etag } });
+  }
+  return res;
+}
+
+// GET /site/:manifestSig          -> serves index
+// GET /site/:manifestSig/*path    -> serves file at path
+// SPA fallback on miss matches the legacy behavior.
 siteRouter.get("/:sig{.+}", async (c) => {
   const raw = c.req.param("sig");
   const slashIdx = raw.indexOf("/");
@@ -218,54 +271,17 @@ siteRouter.get("/:sig{.+}", async (c) => {
     return c.text("invalid manifest signature", 400);
   }
 
-  activeManifestSig = manifestSig;
-  try { writeFileSync(ACTIVE_MANIFEST_PATH, manifestSig); } catch {}
+  const response = await serveManifestPath({
+    manifestSig,
+    filePath,
+    spaFallback: true,
+    ifNoneMatch: c.req.header("If-None-Match") ?? null,
+  });
 
-  let manifest: Manifest;
-  try {
-    manifest = await fetchManifest(manifestSig);
-  } catch (e) {
-    return c.text(`manifest error: ${e instanceof Error ? e.message : "unknown"}`, 404);
-  }
+  if (response.status === 304) return c.body(null, 304);
 
-  const txId = resolveFile(manifest, filePath);
-  const targetTxId = txId ?? resolveFile(manifest, manifest.indexPath); // SPA fallback
-  if (!targetTxId) return c.text("not found", 404);
-
-  try {
-    const buf = await fetchFile(targetTxId);
-    const servePath = txId ? (filePath.startsWith("/") ? filePath.slice(1) : filePath || manifest.indexPath) : manifest.indexPath;
-    const res = buildFileResponse(buf, servePath);
-
-    const etag = res.headers.get("ETag");
-    if (etag && c.req.header("If-None-Match") === etag) return c.body(null, 304);
-
-    const headers: Record<string, string> = {};
-    res.headers.forEach((v, k) => { headers[k] = v; });
-    return c.body(await res.arrayBuffer(), 200, headers);
-  } catch (e) {
-    return c.text(`file error: ${e instanceof Error ? e.message : "unknown"}`, 500);
-  }
+  const headers: Record<string, string> = {};
+  response.headers.forEach((v, k) => { headers[k] = v; });
+  const body = await response.arrayBuffer();
+  return c.body(body, response.status as 200, headers);
 });
-
-// Fallback handler for root-relative asset requests (e.g. /blockchan.webp, /_next/...)
-export async function serveSiteAsset(path: string): Promise<Response | null> {
-  if (!activeManifestSig) return null;
-
-  let manifest: Manifest;
-  try {
-    manifest = await fetchManifest(activeManifestSig);
-  } catch {
-    return null;
-  }
-
-  const txId = resolveFile(manifest, path);
-  if (!txId) return null;
-
-  try {
-    const buf = await fetchFile(txId);
-    return buildFileResponse(buf, path.startsWith("/") ? path.slice(1) : path);
-  } catch {
-    return null;
-  }
-}

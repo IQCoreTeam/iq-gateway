@@ -244,3 +244,56 @@ The `accept` field in the SDL tells the Akash provider to route traffic for your
 ## Architecture
 
 The gateway is a read-only cache layer. It never writes to Solana. All data is public and recoverable from chain. Multiple gateways can serve the same data independently.
+
+## SNS / sol.site integration
+
+The gateway resolves Solana Name Service (SNS) domains to on-chain IQ manifests at request time. One URL record on a `.sol` domain powers three browser surfaces — no server-side coordination required.
+
+### the one record
+
+On your `.sol` domain via [sns.id](https://www.sns.id), set:
+
+```
+Record.URL = https://gateway.iqlabs.dev/site/<your-sig>/<your-index-file>
+```
+
+Per the SNS web-resolution spec, the URL record is the canonical "this is my website" pointer. Brave's native `.sol` resolver and sol-domain.org check it first.
+
+### what works after one record
+
+| URL | How it resolves |
+|---|---|
+| `gateway.iqlabs.dev/sns/<name>` | Reads the URL record on-chain, 302s to `/site/<sig>/<file>` |
+| `<name>.sol` (in Brave with SNS resolution enabled) | Brave reads the URL record, navigates there |
+| `<name>.sol.site/<file>` | Requires a CNAME alongside (see below) |
+
+### path-based access
+
+```bash
+$ curl -L https://gateway.iqlabs.dev/sns/<your-name>
+# → 302 → /site/<sig>/<your-index-file> → on-chain content
+```
+
+The resolver accepts the domain bare (`/sns/nubs`) or with the `.sol` / `.sol.site` suffix.
+
+### host-based access (`*.sol.site`)
+
+For the prettier `<name>.sol.site` URL, also set a CNAME via the "Configure Sol.site" UI on sns.id:
+
+```
+Record.CNAME = sns.iqlabs.dev
+```
+
+`sns.iqlabs.dev` is a direct A record to the gateway origin (no Cloudflare proxy). Sol.site materialises the CNAME as DNS → traffic reaches the gateway → host middleware reads the URL record → manifest served.
+
+### record value formats
+
+The URL record can be:
+- A full URL: `https://gateway.iqlabs.dev/site/<sig>/<file>` (recommended — works for Brave AND our gateway)
+- A bare 86–90 char Solana tx signature (works for our gateway only)
+
+The resolver also reads `Record.TXT` as a fallback.
+
+### caching
+
+Lookups are cached 5 minutes (memory + disk, both positive and negative). Concurrent cold-cache requests for the same domain are deduplicated so only one Solana RPC call fires.
