@@ -19,10 +19,10 @@ import {
 } from "./routes";
 import { startBackfill } from "./backfill";
 import { openapiSpec } from "./openapi";
-import {
-
-  isReservedGatewayPath,
-} from "./site-hosts";
+import { serveManifestPath } from "./routes/site";
+import { resolveDomainToSig } from "./chain/sns";
+import { isReservedGatewayPath, normalizeHost, isSafePath } from "./site-hosts";
+import type { Context, Next } from "hono";
 
 const GENESIS_HASHES: Record<string, string> = {
   "mainnet-beta": "5eykt4UsFv8P8NJdTREpY1vzqKqZKvdpKuc147dw2N9d",
@@ -104,6 +104,50 @@ app.get("/docs", (c) => c.html(`<!doctype html>
   </body>
 </html>`));
 app.route("/", healthRouter);
+
+// Host-routed manifest middleware — `*.sol.site` hosts get their content
+// from the on-chain SNS resolver. Reserved gateway paths and non-sol-site
+// hosts pass through untouched.
+app.use("/*", async (c: Context, next: Next) => {
+  if (isReservedGatewayPath(c.req.path)) return next();
+  const host = normalizeHost(c.req.header("host"));
+  if (!host) return next();
+
+  const SOL_SITE = ".sol.site";
+  if (!host.endsWith(SOL_SITE)) return next();
+
+  const domain = host.slice(0, -SOL_SITE.length);
+  if (!domain) return next();
+
+  const resolved = await resolveDomainToSig(domain);
+  if (!resolved) return next();
+
+  if (!isSafePath(c.req.path)) return c.text("bad path", 400);
+
+  // resolved = "<sig>" or "<sig>/<recordPath>". The recordPath is what the
+  // user baked into their URL record (e.g. /gameboy.html when the manifest's
+  // own indexPath is wrong/default). Treat it as the index when the user
+  // hit root.
+  const slash = resolved.indexOf("/");
+  const sig = slash === -1 ? resolved : resolved.slice(0, slash);
+  const recordPath = slash === -1 ? "" : resolved.slice(slash + 1);
+  const reqPath = c.req.path;
+  const filePath = (reqPath === "/" || reqPath === "") && recordPath
+    ? `/${recordPath}`
+    : reqPath;
+
+  const response = await serveManifestPath({
+    manifestSig: sig,
+    filePath,
+    spaFallback: true,
+    ifNoneMatch: c.req.header("If-None-Match") ?? null,
+  });
+  if (response.status === 304) return c.body(null, 304);
+  const headers: Record<string, string> = {};
+  response.headers.forEach((v, k) => { headers[k] = v; });
+  const body = await response.arrayBuffer();
+  return c.body(body, response.status as 200, headers);
+});
 
 app.use("/*", serveStatic({ root: "./public" }));
 

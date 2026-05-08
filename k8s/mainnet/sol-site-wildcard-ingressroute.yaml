@@ -1,0 +1,50 @@
+# *.sol.site wildcard route — sends every Bonfida sol.site host to the
+# iq-gateway service so the host-based SNS middleware can run for arbitrary
+# domains, not just nubs.sol.site.
+#
+# Apply order:  kubectl apply -f sol-site-wildcard-ingressroute.yaml
+# Removal:      kubectl delete -f sol-site-wildcard-ingressroute.yaml
+#
+# Notes
+# -----
+# • Specific Host(`nubs.sol.site`) IngressRoutes elsewhere still match first
+#   (Traefik priorities: exact > regex), so existing pinned hosts keep their
+#   own configs.
+# • TLS: Let's Encrypt issues a per-host cert on first hit via certResolver:
+#   letsencrypt. LE rate limit is 50 certs / registered domain / week — fine
+#   for organic SNS sites, would need a cert manager rethink at >50 new
+#   .sol.site hosts/week.
+# • The HostRegexp matches one label only (no nested subdomains).
+apiVersion: traefik.io/v1alpha1
+kind: IngressRoute
+metadata:
+  name: sol-site-wildcard-ingress
+  namespace: iqlabs
+spec:
+  entryPoints:
+    - websecure
+  routes:
+    - kind: Rule
+      match: HostRegexp(`^[a-z0-9-]+\.sol\.site$`)
+      services:
+        - name: gateway
+          port: 3000
+  tls:
+    certResolver: letsencrypt
+---
+apiVersion: traefik.io/v1alpha1
+kind: IngressRoute
+metadata:
+  name: sol-site-wildcard-http-redirect
+  namespace: iqlabs
+spec:
+  entryPoints:
+    - web
+  routes:
+    - kind: Rule
+      match: HostRegexp(`^[a-z0-9-]+\.sol\.site$`)
+      middlewares:
+        - name: redirect-https
+      services:
+        - name: gateway
+          port: 3000
