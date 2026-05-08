@@ -6,9 +6,11 @@
   "scripts": {
     "dev": "bun run --watch src/server.ts",
     "start": "bun run src/server.ts",
-    "build": "bun build src/server.ts --outdir dist --target bun"
+    "build": "bun build src/server.ts --outdir dist --target bun",
+    "test": "bun test"
   },
   "dependencies": {
+    "@bonfida/spl-name-service": "^3.0.21",
     "@coral-xyz/anchor": "^0.32.1",
     "@iqlabs-official/solana-sdk": "^0.1.21",
     "@metaplex-foundation/mpl-token-metadata": "^3.4.0",
