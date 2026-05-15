@@ -18,9 +18,9 @@ async function initDecoder() {
   if (coder) return;
   const { BorshInstructionCoder } = await import("@coral-xyz/anchor");
   const { contract } = await import("@iqlabs-official/solana-sdk");
-  const bs58 = await import("bs58");
+  const { default: bs58 } = await import("bs58");
   coder = new BorshInstructionCoder(contract.IQ_IDL as any);
-  decode58 = (bs58 as any).decode ?? (bs58 as any).default?.decode;
+  decode58 = bs58.decode;
 }
 
 function decodeIqInstruction(ixData: string): { name: string; data: Record<string, any> } | null {

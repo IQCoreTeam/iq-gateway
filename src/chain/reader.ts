@@ -2,6 +2,7 @@ import { Connection, PublicKey } from "@solana/web3.js";
 import { BorshInstructionCoder } from "@coral-xyz/anchor";
 import iqlabs from "@iqlabs-official/solana-sdk";
 import { createHash } from "node:crypto";
+import bs58 from "bs58";
 import {
   isHeliusEnabled,
   HELIUS_RPC,
@@ -288,7 +289,7 @@ function decodeRawTxRow(
 
   for (const ix of ixs) {
     if (accountKeys[ix.programIdIndex] !== PROGRAM_ID_B58) continue;
-    const decoded = instructionCoder.decode(Buffer.from(ix.data, "base58"));
+    const decoded = instructionCoder.decode(Buffer.from(bs58.decode(ix.data)));
     if (!decoded || !CODE_IN_NAMES.has(decoded.name)) continue;
 
     const d = decoded.data as { on_chain_path?: string; metadata?: string };
