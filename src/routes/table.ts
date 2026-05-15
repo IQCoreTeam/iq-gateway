@@ -29,14 +29,17 @@ const rowsCache = new MemoryCache<RowsCacheEntry>(500);
 const indexCache = new MemoryCache<string>(50);
 const sliceCache = new MemoryCache<string>(2000);
 
-// Inflight dedup: concurrent requests for the same key share one Promise.
-// The Map is shared by /rows (RowsCacheEntry), /thread (RowsCacheEntry),
-// /index (string), /slice (string), and backgroundRefresh (void). Same key
-// never carries two different work shapes — keys are namespaced by route.
+// Inflight dedup: concurrent requests for the same operation share one Promise.
+// The Map is shared by /rows, /thread, /index, /slice, and background refresh.
+// Route prefixes keep different work shapes from colliding.
 const inflight = new Map<string, Promise<unknown>>();
 
 function cacheKey(...parts: string[]): string {
   return createHash("sha256").update(parts.join(":")).digest("hex").slice(0, 24);
+}
+
+function rowsInflightKey(kind: "fetch" | "refresh", key: string): string {
+  return `rows:${kind}:${key}`;
 }
 
 /** Weak ETag derived from the cached JSON body. Stable across cache hits
@@ -80,41 +83,60 @@ setInterval(() => {
 
 // ─── /table/:tablePda/rows ───────────────────────────────────────────────────
 
+interface SignatureCatchup {
+  signatures: string[];
+  overlapFound: boolean;
+}
+
+const SIGNATURE_PAGE_LIMIT = 1000;
+const MAX_BACKGROUND_SIG_PAGES = 3;
+
 // Page through getSignaturesForAddress until we either:
 //   - find `knownNewestSig` in a page (overlap → return only sigs above it)
-//   - hit an empty page (no overlap reachable → return everything collected)
+//   - hit the bounded catch-up limit or end of history
 // Cold-cache case (knownNewestSig=null): just return the first page.
 async function fetchSigsUntilOverlap(
   tablePda: string,
   knownNewestSig: string | null,
-): Promise<string[]> {
+): Promise<SignatureCatchup> {
+  if (!knownNewestSig) {
+    return {
+      signatures: await fetchRecentSignatures(tablePda, SIGNATURE_PAGE_LIMIT),
+      overlapFound: true,
+    };
+  }
+
   const collected: string[] = [];
   let before: string | undefined;
 
-  while (true) {
-    const page = await fetchRecentSignatures(tablePda, 1000, before);
-    if (page.length === 0) return collected;
+  for (let pageNo = 0; pageNo < MAX_BACKGROUND_SIG_PAGES; pageNo++) {
+    const page = await fetchRecentSignatures(tablePda, SIGNATURE_PAGE_LIMIT, before);
+    if (page.length === 0) return { signatures: collected, overlapFound: false };
 
-    if (knownNewestSig) {
-      const idx = page.indexOf(knownNewestSig);
-      if (idx >= 0) return [...collected, ...page.slice(0, idx)];
+    const idx = page.indexOf(knownNewestSig);
+    if (idx >= 0) {
+      return { signatures: [...collected, ...page.slice(0, idx)], overlapFound: true };
     }
 
     collected.push(...page);
+    if (page.length < SIGNATURE_PAGE_LIMIT) {
+      return { signatures: collected, overlapFound: false };
+    }
     before = page[page.length - 1];
-
-    if (!knownNewestSig) return collected;
   }
+
+  return { signatures: collected, overlapFound: false };
 }
 
 function buildRowsResponse(tablePda: string, rows: Record<string, unknown>[], limit: number, before?: string) {
+  const pageRows = rows.slice(0, limit);
   return {
     tablePda,
-    rows,
-    count: rows.length,
+    rows: pageRows,
+    count: pageRows.length,
     limit,
     before: before || null,
-    nextCursor: rows.length === limit ? (rows[rows.length - 1] as { __txSignature?: string })?.__txSignature : null,
+    nextCursor: pageRows.length === limit ? (pageRows[pageRows.length - 1] as { __txSignature?: string })?.__txSignature : null,
   };
 }
 
@@ -231,20 +253,30 @@ async function backgroundRefresh(
   if (meta.lastTimestamp === entry.lastTimestamp) return;
 
   const newestSig = entry.rows[0]?.__txSignature as string | undefined;
-  const newSigs = await fetchSigsUntilOverlap(tablePda, newestSig ?? null);
+  const { signatures: newSigs, overlapFound } = await fetchSigsUntilOverlap(tablePda, newestSig ?? null);
 
-  // RPC indexing lag — chain says ts changed but sig list hasn't caught up.
-  // Hold off stamping lastTimestamp so the next refresh retries.
-  if (newSigs.length === 0) return;
+  if (newSigs.length === 0) {
+    // Overlap at index 0 means the cache already has the newest indexed sig
+    // (common after /notify). No overlap means likely RPC indexing lag, so
+    // hold off stamping lastTimestamp and retry on the next refresh.
+    if (overlapFound) {
+      entry.lastTimestamp = meta.lastTimestamp;
+      rowsCache.set(key, entry, ttl);
+    }
+    return;
+  }
 
   const existing = new Set(entry.rows.map(r => (r as { __txSignature?: string }).__txSignature));
-  const trulyNew = newSigs.filter(s => !existing.has(s));
+  const trulyNew = newSigs.filter(s => !existing.has(s)).slice(0, limit);
 
   if (trulyNew.length === 0) {
     // Either /notify already prepended these, or we just migrated an entry
-    // whose rows already covered current chain state. Stamp ts and exit.
-    entry.lastTimestamp = meta.lastTimestamp;
-    rowsCache.set(key, entry, ttl);
+    // whose rows already covered current chain state. Only stamp when the
+    // indexed sig list actually overlapped the cache.
+    if (overlapFound) {
+      entry.lastTimestamp = meta.lastTimestamp;
+      rowsCache.set(key, entry, ttl);
+    }
     return;
   }
 
@@ -261,8 +293,10 @@ async function backgroundRefresh(
     }
   }
 
-  entry.rows = [...newRows, ...entry.rows];
-  entry.lastTimestamp = meta.lastTimestamp;
+  if (newRows.length === 0) return;
+
+  entry.rows = [...newRows, ...entry.rows].slice(0, limit);
+  if (overlapFound) entry.lastTimestamp = meta.lastTimestamp;
   entry.json = JSON.stringify(buildRowsResponse(tablePda, entry.rows, limit, undefined));
   rowsCache.set(key, entry, ttl);
   setDiskCache("rows", key, entry.json).catch(() => {});
@@ -289,7 +323,7 @@ tableRouter.get("/:tablePda/rows", async (c) => {
     if (mem) {
       // Head page: throttled background refresh (max once per 30s per key)
       if (isHead && shouldRefresh(key)) {
-        deduped(inflight, key, () => backgroundRefresh(tablePda, key, limit, ttl)).catch(() => {});
+        deduped(inflight, rowsInflightKey("refresh", key), () => backgroundRefresh(tablePda, key, limit, ttl)).catch(() => {});
       }
       return respondWithEtag(c, { ...JSON.parse(mem.json), cached: true }, etagFor(mem.json));
     }
@@ -310,7 +344,7 @@ tableRouter.get("/:tablePda/rows", async (c) => {
   }
 
   try {
-    const entry = await deduped(inflight, key, () => fetchRowsCold(tablePda, key, limit, before, ttl));
+    const entry = await deduped(inflight, rowsInflightKey("fetch", key), () => fetchRowsCold(tablePda, key, limit, before, ttl));
     return respondWithEtag(c, { ...JSON.parse(entry.json), cached: false }, etagFor(entry.json));
   } catch (e) {
     const message = e instanceof Error ? e.message : "unknown error";
@@ -661,6 +695,7 @@ tableRouter.post("/:tablePda/notify", async (c) => {
     if (!existing || !existing.rows) continue;
     if (existing.rows.some((r) => (r as { __txSignature?: string }).__txSignature === txSig)) continue;
     existing.rows.unshift(row);
+    existing.rows = existing.rows.slice(0, limit);
     existing.json = JSON.stringify(buildRowsResponse(tablePda, existing.rows, limit, undefined));
     rowsCache.set(key, existing, HEAD_TTL);
   }

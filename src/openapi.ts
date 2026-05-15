@@ -68,7 +68,7 @@ export const openapiSpec = {
     "/table/{tablePda}/meta": {
       get: {
         tags: ["tables"],
-        summary: "Decoded table metadata (name, columns, gate)",
+        summary: "Decoded table metadata (name, columns, lastTimestamp, gate)",
         parameters: [pda],
         responses: {
           200: {
@@ -81,6 +81,7 @@ export const openapiSpec = {
                     name: { type: "string" },
                     columns: { type: "array", items: { type: "string" } },
                     idCol: { type: "string" },
+                    lastTimestamp: { type: "integer", description: "Contract-updated timestamp for the latest table row write" },
                     gate: {
                       nullable: true,
                       type: "object",

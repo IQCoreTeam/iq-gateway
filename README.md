@@ -64,7 +64,7 @@ That's it. Your gateway is live at `http://localhost:3000`.
 | `GET /table/{pda}/rows` | Read table rows with pagination. Supports `If-None-Match` → `304 Not Modified` via weak ETag. Rows include `__txSignature`, `__signer` (fee payer), and `__blockTime` (chain-truth timestamp). |
 | `GET /table/{pda}/index` | Full signature index for a table |
 | `GET /table/{pda}/slice` | Read specific rows by signature |
-| `GET /table/{pda}/meta` | Table metadata (name, columns, gate config) |
+| `GET /table/{pda}/meta` | Table metadata (name, columns, `lastTimestamp`, gate config) |
 | `POST /table/{pda}/notify` | Notify about a new tx for instant cache injection. Also pushes to open SSE streams. |
 | `GET /table/{pda}/subscribe` | **Server-Sent Events stream.** Emits `event: hello` on connect, `event: row` on each `/notify`, `event: ping` every 30s. Clients use `new EventSource(...)` instead of polling. |
 | `GET /table/{feedPda}/thread/{threadPda}` | Resolved `{op, replies, totalReplies}` in one call. Server-side OP picker (prefers row with `sub`, tiebreak earliest time) removes the two-fetch + client-side OP-resolution pattern. |
