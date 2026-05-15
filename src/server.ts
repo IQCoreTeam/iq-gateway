@@ -32,6 +32,10 @@ const GENESIS_HASHES: Record<string, string> = {
   devnet: "EtWTRABZaYq6iMfeYKouRu166VU2xqa1wcaWoxPkrZBG",
   testnet: "4uhcVJyU9pJkvQyS88uRDiswHXSCkY3zQawwpjk2NsNY",
 };
+const SWAGGER_ASSETS: Record<string, string> = {
+  "swagger-ui.css": "text/css; charset=utf-8",
+  "swagger-ui-bundle.js": "application/javascript; charset=utf-8",
+};
 
 async function validateCluster() {
   const cluster = process.env.SOLANA_CLUSTER;
@@ -89,17 +93,32 @@ app.route("/sns", snsRouter);
 app.route("/cache", cacheRouter);
 app.route("/gate", gateRouter);
 
-// OpenAPI spec + Swagger UI — loaded from CDN so no npm dep is needed.
+// OpenAPI spec + Swagger UI.
 app.get("/openapi.json", (c) => c.json(openapiSpec));
+app.get("/docs/assets/:file", async (c) => {
+  const file = c.req.param("file");
+  const contentType = SWAGGER_ASSETS[file];
+  if (!contentType) return c.text("not found", 404);
+
+  const asset = Bun.file(new URL(`../node_modules/swagger-ui-dist/${file}`, import.meta.url));
+  if (!(await asset.exists())) return c.text("swagger asset missing", 500);
+
+  return new Response(asset, {
+    headers: {
+      "content-type": contentType,
+      "cache-control": "public, max-age=31536000, immutable",
+    },
+  });
+});
 app.get("/docs", (c) => c.html(`<!doctype html>
 <html>
   <head>
     <title>IQ Gateway API</title>
-    <link rel="stylesheet" href="https://unpkg.com/swagger-ui-dist@5/swagger-ui.css">
+    <link rel="stylesheet" href="/docs/assets/swagger-ui.css">
   </head>
   <body>
     <div id="swagger-ui"></div>
-    <script src="https://unpkg.com/swagger-ui-dist@5/swagger-ui-bundle.js" crossorigin></script>
+    <script src="/docs/assets/swagger-ui-bundle.js"></script>
     <script>
       window.ui = SwaggerUIBundle({
         url: "/openapi.json",

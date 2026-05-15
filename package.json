@@ -21,7 +21,8 @@
     "@solana/web3.js": "^1.98.0",
     "bs58": "^4.0.1",
     "dotenv": "^17.2.3",
-    "hono": "^4.6.0"
+    "hono": "^4.6.0",
+    "swagger-ui-dist": "^5.32.6"
   },
   "devDependencies": {
     "@types/bun": "latest",

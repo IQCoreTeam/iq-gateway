@@ -93,7 +93,7 @@ That's it. Your gateway is live at `http://localhost:3000`.
 | Endpoint | Description |
 |----------|-------------|
 | `GET /openapi.json` | OpenAPI 3.0 schema for every endpoint |
-| `GET /docs` | Interactive Swagger UI (loaded from CDN, no npm dep) |
+| `GET /docs` | Interactive Swagger UI with gateway-hosted assets |
 
 ### Site Hosting (Solana Permanent Web)
 

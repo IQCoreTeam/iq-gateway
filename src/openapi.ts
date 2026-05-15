@@ -18,7 +18,9 @@ export const openapiSpec = {
     license: { name: "See LICENSE in the iq-gateway repo" },
   },
   servers: [
-    { url: "https://gateway.solanainternet.com", description: "Production" },
+    { url: "/", description: "Current gateway host" },
+    { url: "https://gateway.iqlabs.dev", description: "Production (iqlabs.dev)" },
+    { url: "https://gateway.solanainternet.com", description: "Production (solanainternet.com)" },
     { url: "http://localhost:3000", description: "Local dev" },
   ],
   tags: [
