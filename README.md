@@ -114,6 +114,10 @@ bun run scripts/deploy-site.ts ./my-site ./keypair.json
 | Endpoint | Description |
 |----------|-------------|
 | `GET /cache/info` | Entry count, total size, by-type breakdown |
+| `GET /cache/entries` | Paginated disk-cache entry index. Supports `type`, `q`, `limit`, and `cursor`. |
+| `GET /cache/entries/{id}` | One disk-cache entry with a small decoded preview when possible. |
+| `GET /cache/blob/{id}` | Raw cached bytes for a disk-cache entry. |
+| `GET /cache/memory` | Memory-cache counts, or paginated keys/previews with `cache=<name>&includeValues=true`. |
 | `GET /cache/snapshot` | Streamed `tar.gz` of the full cache (cache.db + blob dirs). VACUUM-INTO consistent. Public read; lets a cold gateway warm up from a hot peer without re-fetching every entry from chain. See [Cache Snapshot](#cache-snapshot) below. |
 
 ### System
@@ -278,9 +282,17 @@ curl -sS https://peer-gateway/cache/snapshot | tar -xz -C ./cache
 | Endpoint | Description |
 |---|---|
 | `GET /cache/info` | entry count + total size + by-type breakdown |
+| `GET /cache/entries` | paginated disk-cache entry index for external explorers |
+| `GET /cache/entries/{id}` | one disk-cache entry with metadata + preview |
+| `GET /cache/blob/{id}` | raw cached bytes for an entry |
+| `GET /cache/memory` | memory-cache counts, keys, and optional previews |
 | `GET /cache/snapshot` | streamed `tar.gz` of the full cache (cache.db + blob dirs). VACUUM-INTO consistent. public read. |
 
 The gateway is read-only by design — no `POST /cache/restore` or `/sync-from-peer`. Operators write to their own cache directory directly (filesystem op on their own host); they don't write across the network.
+
+The explorer endpoints are intentionally paginated/read-only so a separate site
+can browse cache contents without asking the gateway to dump a multi-GB cache as
+one JSON response.
 
 ## Architecture
 

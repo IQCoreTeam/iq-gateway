@@ -5,6 +5,13 @@ interface CacheEntry<T> {
   expiresAt: number;
 }
 
+export interface MemoryCacheSnapshotEntry<T> {
+  key: string;
+  expiresAt: number;
+  ttlMs: number;
+  value?: T;
+}
+
 export class MemoryCache<T> {
   private cache = new Map<string, CacheEntry<T>>();
   private maxSize: number;
@@ -59,6 +66,26 @@ export class MemoryCache<T> {
 
   keys(): string[] {
     return Array.from(this.cache.keys());
+  }
+
+  snapshot(includeValues = false): Array<MemoryCacheSnapshotEntry<T>> {
+    const now = Date.now();
+    const out: Array<MemoryCacheSnapshotEntry<T>> = [];
+
+    for (const [key, entry] of this.cache) {
+      if (now > entry.expiresAt) {
+        this.cache.delete(key);
+        continue;
+      }
+      out.push({
+        key,
+        expiresAt: entry.expiresAt,
+        ttlMs: entry.expiresAt - now,
+        ...(includeValues ? { value: entry.value } : {}),
+      });
+    }
+
+    return out;
   }
 }
 

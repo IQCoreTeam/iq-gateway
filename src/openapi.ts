@@ -27,7 +27,7 @@ export const openapiSpec = {
     { name: "users", description: "Per-wallet views — assets, sessions, profile, connections, authored posts" },
     { name: "gate", description: "Token-gate verification for gated tables" },
     { name: "site", description: "Solana-hosted static sites" },
-    { name: "cache", description: "Disk-cache snapshot for peer-bootstrap" },
+    { name: "cache", description: "Disk-cache snapshot and read-only cache explorer APIs" },
     { name: "system", description: "Health checks, cache stats, version" },
   ],
   paths: {
@@ -321,6 +321,55 @@ export const openapiSpec = {
         tags: ["cache"],
         summary: "Cache stats — entry count, total size, by-type breakdown",
         responses: { 200: { description: "ok" } },
+      },
+    },
+    "/cache/entries": {
+      get: {
+        tags: ["cache"],
+        summary: "Paginated disk-cache entry index",
+        description: "Read-only index for external cache explorers. Returns metadata only, not full blobs.",
+        parameters: [
+          { name: "type", in: "query", schema: { type: "string" }, description: "Optional cache type filter, e.g. rows, meta, img, site-file" },
+          { name: "q", in: "query", schema: { type: "string" }, description: "Optional substring search against the cache key" },
+          { name: "limit", in: "query", schema: { type: "integer", default: 100, maximum: 500 } },
+          { name: "cursor", in: "query", schema: { type: "string" }, description: "Opaque cursor returned by the previous page" },
+        ],
+        responses: { 200: { description: "`{ entries, count, limit, nextCursor, cacheDir }`" }, 400: { description: "Invalid filter/cursor" } },
+      },
+    },
+    "/cache/entries/{id}": {
+      get: {
+        tags: ["cache"],
+        summary: "Disk-cache entry detail with preview",
+        parameters: [{ name: "id", in: "path", required: true, schema: { type: "string" }, description: "Opaque entry id from /cache/entries" }],
+        responses: {
+          200: { description: "`{ entry, hasBlob, contentType, preview }`" },
+          404: { description: "Entry not found" },
+        },
+      },
+    },
+    "/cache/blob/{id}": {
+      get: {
+        tags: ["cache"],
+        summary: "Raw cached bytes for a disk-cache entry",
+        parameters: [{ name: "id", in: "path", required: true, schema: { type: "string" }, description: "Opaque entry id from /cache/entries" }],
+        responses: {
+          200: { description: "Raw cached bytes" },
+          404: { description: "Entry/blob not found" },
+        },
+      },
+    },
+    "/cache/memory": {
+      get: {
+        tags: ["cache"],
+        summary: "Memory-cache counts, keys, and optional previews",
+        parameters: [
+          { name: "cache", in: "query", schema: { type: "string", default: "all" }, description: "Optional cache name: meta, images, userState, sns, tableRows, tableIndex, tableSlice" },
+          { name: "includeValues", in: "query", schema: { type: "boolean", default: false }, description: "Include bounded value previews for one selected cache" },
+          { name: "limit", in: "query", schema: { type: "integer", default: 100, maximum: 500 } },
+          { name: "cursor", in: "query", schema: { type: "string" }, description: "Numeric offset cursor for memory-cache pages" },
+        ],
+        responses: { 200: { description: "Memory-cache summary or page" }, 400: { description: "Invalid cache name" } },
       },
     },
     "/cache/snapshot": {
