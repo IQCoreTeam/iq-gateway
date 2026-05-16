@@ -41,3 +41,26 @@ jobs:
           labels: ${{ steps.meta.outputs.labels }}
           cache-from: type=gha
           cache-to: type=gha,mode=max
+
+      - name: Deploy to iqlabs-prod-01
+        # The server's authorized_keys is command-restricted to deploy.sh iq-gateway,
+        # so even if DEPLOY_SSH_KEY leaks it can only redeploy this one service.
+        # Host key pinned to SSH_HOST_KEY (full pubkey line) to prevent MITM.
+        if: github.ref == 'refs/heads/main' && success()
+        env:
+          DEPLOY_HOST: ${{ secrets.DEPLOY_HOST }}
+          DEPLOY_SSH_KEY: ${{ secrets.DEPLOY_SSH_KEY }}
+          SSH_HOST_KEY: ${{ secrets.SSH_HOST_KEY }}
+        run: |
+          mkdir -p ~/.ssh
+          umask 077
+          printf '%s\n' "$DEPLOY_SSH_KEY" > ~/.ssh/deploy_key
+          printf '%s %s\n' "$DEPLOY_HOST" "$SSH_HOST_KEY" > ~/.ssh/known_hosts
+          ssh -i ~/.ssh/deploy_key \
+              -o UserKnownHostsFile=~/.ssh/known_hosts \
+              -o StrictHostKeyChecking=yes \
+              -o BatchMode=yes \
+              -o ConnectTimeout=10 \
+              iqlabs@"$DEPLOY_HOST" 'this command is ignored due to command restriction'
+          # Always clean up the key
+          shred -u ~/.ssh/deploy_key 2>/dev/null || rm -f ~/.ssh/deploy_key
