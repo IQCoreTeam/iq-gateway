@@ -17,6 +17,7 @@ import {
   snsRouter,
   cacheRouter,
   gateRouter,
+  dbrootsRouter,
 } from "./routes";
 import { startBackfill } from "./backfill";
 import { openapiSpec } from "./openapi";
@@ -92,6 +93,7 @@ app.route("/site", siteRouter);
 app.route("/sns", snsRouter);
 app.route("/cache", cacheRouter);
 app.route("/gate", gateRouter);
+app.route("/dbroots", dbrootsRouter);
 
 // OpenAPI spec + Swagger UI.
 app.get("/openapi.json", (c) => c.json(openapiSpec));

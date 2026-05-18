@@ -10,3 +10,4 @@ export { siteRouter } from "./site";
 export { gateRouter } from "./gate";
 export { snsRouter } from "./sns";
 export { cacheRouter } from "./cache-snapshot";
+export { dbrootsRouter } from "./dbroots";

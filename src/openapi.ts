@@ -29,6 +29,7 @@ export const openapiSpec = {
     { name: "users", description: "Per-wallet views — assets, sessions, profile, connections, authored posts" },
     { name: "gate", description: "Token-gate verification for gated tables" },
     { name: "site", description: "Solana-hosted static sites" },
+    { name: "dbroots", description: "Cross-dApp discovery — every DbRoot the iqlabs program owns" },
     { name: "cache", description: "Disk-cache snapshot and read-only cache explorer APIs" },
     { name: "system", description: "Health checks, cache stats, version" },
   ],
@@ -329,6 +330,17 @@ export const openapiSpec = {
           { name: "path", in: "path", required: true, schema: { type: "string" } },
         ],
         responses: { 200: { description: "File content" } },
+      },
+    },
+    "/dbroots": {
+      get: {
+        tags: ["dbroots"],
+        summary: "List every DbRoot owned by the iqlabs program",
+        description: "Discovers DbRoot accounts on-chain via `getProgramAccounts` with a memcmp filter on the Anchor DbRoot discriminator (so the response stays small — one row per dApp). Cached 30 minutes; DbRoots only change when a new dApp launches or a table is registered, so a long TTL is fine. Returns `{dbroots, fetchedAt, count}` where each dbroot summarizes id, pda, creator, and table-seed counts.",
+        responses: {
+          200: { description: "DbRoot summaries" },
+          500: { description: "Failed to read DbRoots from RPC" },
+        },
       },
     },
     "/cache/info": {

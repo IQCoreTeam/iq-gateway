@@ -110,6 +110,12 @@ Deploy a site:
 bun run scripts/deploy-site.ts ./my-site ./keypair.json
 ```
 
+### DbRoot Discovery
+
+| Endpoint | Description |
+|----------|-------------|
+| `GET /dbroots` | Lists every DbRoot the iqlabs program owns, in one call. Uses `getProgramAccounts` with a memcmp filter on the Anchor DbRoot discriminator, so the response stays small (one row per dApp). Cached 30 min — DbRoots only mutate when a new dApp launches or a table is registered. Returns `{dbroots: [{pda, id, creator, tableSeedsCount, globalTableSeedsCount}], fetchedAt, count}`. |
+
 ### Cache (peer bootstrap)
 
 | Endpoint | Description |
