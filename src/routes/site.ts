@@ -258,6 +258,24 @@ export async function serveManifestPath(input: {
   return res;
 }
 
+// GET /site/:manifestSig/manifest -> returns normalized manifest as JSON
+// Registered before the catch-all `:sig{.+}` so it isn't swallowed by it.
+// Lets clients (e.g. iq-wide-web) read the file list + indexPath without
+// having to parse the two raw manifest formats themselves.
+siteRouter.get("/:sig/manifest", async (c) => {
+  const sig = c.req.param("sig");
+  if (sig.length < 80) return c.text("invalid manifest signature", 400);
+  try {
+    const manifest = await fetchManifest(sig);
+    return c.json({ manifestSig: sig, ...manifest });
+  } catch (e) {
+    return c.text(
+      `manifest error: ${e instanceof Error ? e.message : "unknown"}`,
+      404,
+    );
+  }
+});
+
 // GET /site/:manifestSig          -> serves index
 // GET /site/:manifestSig/*path    -> serves file at path
 // SPA fallback on miss matches the legacy behavior.

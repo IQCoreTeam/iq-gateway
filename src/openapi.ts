@@ -307,6 +307,19 @@ export const openapiSpec = {
         responses: { 200: { description: "Site HTML" } },
       },
     },
+    "/site/{manifestSig}/manifest": {
+      get: {
+        tags: ["site"],
+        summary: "Return the normalized site manifest as JSON",
+        description: "Resolves the manifest sig, normalizes both gateway and Iqoogle formats, and returns `{ manifestSig, indexPath, files }`. Lets clients pick which files to fetch (or render the site themselves) without re-parsing raw manifest bytes.",
+        parameters: [{ name: "manifestSig", in: "path", required: true, schema: { type: "string" } }],
+        responses: {
+          200: { description: "Normalized manifest JSON" },
+          400: { description: "Invalid manifest signature" },
+          404: { description: "Manifest not found" },
+        },
+      },
+    },
     "/site/{manifestSig}/{path}": {
       get: {
         tags: ["site"],

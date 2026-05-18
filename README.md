@@ -101,6 +101,7 @@ That's it. Your gateway is live at `http://localhost:3000`.
 |----------|-------------|
 | `GET /site/{manifestSig}` | Serve a website from Solana (index.html) |
 | `GET /site/{manifestSig}/{path}` | Serve any file from an on-chain manifest |
+| `GET /site/{manifestSig}/manifest` | Return the normalized manifest as JSON (`{manifestSig, indexPath, files}`). For clients that want to render sites themselves instead of consuming the served HTML. |
 
 Supports both Iqoogle and gateway manifest formats. SPA fallback for unknown paths. Root-relative asset requests (e.g. `/logo.webp`) are resolved against the active manifest.
 
