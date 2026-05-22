@@ -331,18 +331,19 @@ Per the SNS web-resolution spec, the URL record is the canonical "this is my web
 
 | URL | How it resolves |
 |---|---|
-| `gateway.iqlabs.dev/sns/<name>` | Reads the URL record on-chain, 302s to `/site/<sig>/<file>` |
+| `gateway.iqlabs.dev/sns/<name>` | JSON `{domain, owner, record}` — the domain's owner wallet + raw SOL-record value (a wallet/PDA), for dispatcher clients to classify. `?fresh=1` skips the 24h cache. |
+| `gateway.iqlabs.dev/sns/<name>/record` | Reads the URL record on-chain, 302s to `/site/<sig>/<file>` (site serving) |
 | `<name>.sol` (in Brave with SNS resolution enabled) | Brave reads the URL record, navigates there |
 | `<name>.sol.site/<file>` | Requires a CNAME alongside (see below) |
 
 ### path-based access
 
 ```bash
-$ curl -L https://gateway.iqlabs.dev/sns/<your-name>
+$ curl -L https://gateway.iqlabs.dev/sns/<your-name>/record
 # → 302 → /site/<sig>/<your-index-file> → on-chain content
 ```
 
-The resolver accepts the domain bare (`/sns/nubs`) or with the `.sol` / `.sol.site` suffix.
+The resolver accepts the domain bare (`/sns/nubs/record`) or with the `.sol` / `.sol.site` suffix.
 
 ### host-based access (`*.sol.site`)
 

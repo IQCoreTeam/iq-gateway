@@ -411,8 +411,22 @@ export const openapiSpec = {
     "/sns/{domain}": {
       get: {
         tags: ["site"],
+        summary: "Resolve a SNS domain to its owner + SOL record",
+        description: "Returns `{domain, owner, record}`. `owner` is the registry owner wallet; `record` is the raw SOL-record value (a wallet or PDA the owner pointed the domain at, returned verbatim — the client classifies it), or null. Both cached 24h; `?fresh=1` skips the cache read. For serving a site from a domain's /site URL record, use `/sns/{domain}/record` instead.",
+        parameters: [
+          { name: "domain", in: "path", required: true, schema: { type: "string" } },
+          { name: "fresh", in: "query", required: false, schema: { type: "string", enum: ["1"] } },
+        ],
+        responses: {
+          200: { description: "`{domain, owner, record}` (owner/record may be null)" },
+        },
+      },
+    },
+    "/sns/{domain}/record": {
+      get: {
+        tags: ["site"],
         summary: "Resolve a SNS domain → 302 to its IQ manifest",
-        description: "Reads the TXT or Url V2 record on `<domain>.sol`. If the record value is a Solana tx signature (or wraps one inside a /site/<sig>/ URL), returns 302 to /site/<sig>/. Otherwise 404.",
+        description: "Reads the TXT or Url V2 record on `<domain>.sol`. If the record value is a Solana tx signature (or wraps one inside a /site/<sig>/ URL), returns 302 to /site/<sig>/. Otherwise 404. This is the legacy site-serving redirect that `.sol.site` hosting relies on.",
         parameters: [{ name: "domain", in: "path", required: true, schema: { type: "string" } }],
         responses: {
           302: { description: "Redirect to /site/<sig>/" },
@@ -420,10 +434,10 @@ export const openapiSpec = {
         },
       },
     },
-    "/sns/{domain}/{path}": {
+    "/sns/{domain}/record/{path}": {
       get: {
         tags: ["site"],
-        summary: "Same as /sns/{domain}, but redirect to a sub-path of the manifest",
+        summary: "Same as /sns/{domain}/record, but redirect to a sub-path of the manifest",
         parameters: [
           { name: "domain", in: "path", required: true, schema: { type: "string" } },
           { name: "path", in: "path", required: true, schema: { type: "string" } },
