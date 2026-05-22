@@ -23,9 +23,18 @@ export async function readTableMeta(
   lastTimestamp: number;
   gate: { mint: string; amount: number; gateType: number } | null;
 } | null> {
+  // getAccountInfo failures (RPC trouble) propagate. A present account that
+  // isn't a Table (e.g. someone probed a wallet address) fails to decode —
+  // that's "not a table", returned as null so the caller can cache it instead
+  // of re-hitting RPC on every probe.
   const info = await conn.getAccountInfo(new PublicKey(tablePda));
   if (!info) return null;
-  const decoded = sdkReader.decodeTableMeta(info.data);
+  let decoded;
+  try {
+    decoded = sdkReader.decodeTableMeta(info.data);
+  } catch {
+    return null;
+  }
   const mint = decoded.gate.mint.toBase58();
   return {
     name: decoded.name,
@@ -45,8 +54,11 @@ export async function getTableMetaCached(
   tablePda: string,
 ): Promise<Awaited<ReturnType<typeof readTableMeta>>> {
   const cached = metaCache.get(tablePda);
-  if (cached) return JSON.parse(cached);
+  if (cached !== null) return JSON.parse(cached);
   const meta = await readTableMeta(metaRpc, tablePda);
-  if (meta) metaCache.set(tablePda, JSON.stringify(meta), META_TTL);
+  // Cache the miss too (stored as "null") — callers probe arbitrary pubkeys
+  // (e.g. a wallet) to ask "is this a table?", and a wallet decodes to null.
+  // Without this, every such probe re-hits RPC.
+  metaCache.set(tablePda, JSON.stringify(meta), META_TTL);
   return meta;
 }
