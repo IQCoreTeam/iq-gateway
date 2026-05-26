@@ -203,6 +203,7 @@ function formatRow(
   metadata: string,
   signer?: string,
   blockTime?: number,
+  onChainPath?: string,
 ): Record<string, unknown> {
   let row: Record<string, unknown>;
   if (!data) {
@@ -216,6 +217,10 @@ function formatRow(
   }
   if (signer) row.__signer = signer;
   if (typeof blockTime === "number") row.__blockTime = blockTime;
+  // Truth from the contract: empty string = inline (metadata-only), non-empty
+  // = linked-list head or session pda. Caller may omit (undefined) when the
+  // decode path didn't expose it.
+  if (typeof onChainPath === "string") row.__onChainPath = onChainPath;
   // Index the signer→sig mapping here so every formatted row gets recorded
   // regardless of which decode path produced it. Cheap (memory + disk).
   if (signer) recordSignerSig(signer, sig);
@@ -241,7 +246,7 @@ function extractRawTxMeta(raw: any): { signer?: string; blockTime?: number; acco
 
 export async function readSingleRow(
   sig: string,
-  preloaded?: { signer?: string; blockTime?: number },
+  preloaded?: { signer?: string; blockTime?: number; onChainPath?: string },
 ): Promise<Record<string, unknown> | null> {
   return withRetry(async () => {
     try {
@@ -255,7 +260,7 @@ export async function readSingleRow(
       ]);
       const signer = preloaded?.signer ?? tx?.transaction.message.getAccountKeys().get(0)?.toBase58();
       const blockTime = preloaded?.blockTime ?? (tx?.blockTime ?? undefined);
-      return formatRow(sig, codeIn.data, codeIn.metadata, signer, blockTime);
+      return formatRow(sig, codeIn.data, codeIn.metadata, signer, blockTime, preloaded?.onChainPath);
     } catch (err) {
       if (err instanceof Error && err.message.includes("instruction not found")) {
         return null;
@@ -276,12 +281,15 @@ const CODE_IN_NAMES = new Set([
   "db_code_in", "db_instruction_code_in", "wallet_connection_code_in",
 ]);
 
+// Returns the decoded row when the fast path can handle it, otherwise returns
+// the onChainPath we observed so the SDK fallback can stamp it on the result.
+// onChainPath = undefined means "not a recognized code_in instruction at all".
 function decodeRawTxRow(
   sig: string,
   raw: any,
   meta: { signer?: string; blockTime?: number; accountKeys: string[] },
-): Record<string, unknown> | null {
-  if (!raw?.transaction?.message) return null;
+): { row: Record<string, unknown> | null; onChainPath?: string } {
+  if (!raw?.transaction?.message) return { row: null };
   const { signer, blockTime, accountKeys } = meta;
   const msg = raw.transaction.message;
   const ixs: Array<{ programIdIndex: number; data: string }> =
@@ -296,19 +304,20 @@ function decodeRawTxRow(
     const onChainPath = d.on_chain_path ?? "";
     const metadata = d.metadata ?? "";
 
-    // Session/linked-list posts need full SDK decode
-    if (onChainPath.length > 0) return null;
+    // Session/linked-list posts need full SDK decode — but we've already
+    // observed onChainPath, so pass it back so the fallback can include it.
+    if (onChainPath.length > 0) return { row: null, onChainPath };
 
     try {
       const parsed = JSON.parse(metadata);
       if (parsed?.data) {
         const rowData = typeof parsed.data === "string" ? parsed.data : JSON.stringify(parsed.data);
-        return formatRow(sig, rowData, metadata, signer, blockTime);
+        return { row: formatRow(sig, rowData, metadata, signer, blockTime, onChainPath) };
       }
     } catch {}
-    return formatRow(sig, null, metadata, signer, blockTime);
+    return { row: formatRow(sig, null, metadata, signer, blockTime, onChainPath) };
   }
-  return null;
+  return { row: null };
 }
 
 export async function fetchSignatureIndex(
@@ -345,7 +354,9 @@ export async function readMultipleRows(
 
   // Keeps the Helius raw tx for sigs that couldn't fast-decode, so the
   // SDK fallback can reuse signer+blockTime instead of refetching the tx.
-  const preloadMap = new Map<string, { signer?: string; blockTime?: number }>();
+  // Also carries onChainPath when we observed it during fast-decode — the
+  // SDK fallback can't recover it from readCodeIn alone.
+  const preloadMap = new Map<string, { signer?: string; blockTime?: number; onChainPath?: string }>();
 
   if (isHeliusEnabled()) {
     metrics.heliusCalls++;
@@ -356,12 +367,12 @@ export async function readMultipleRows(
         const raw = txMap.get(sig);
         if (!raw) { results.set(sig, null); continue; }
         const meta = extractRawTxMeta(raw);
-        const row = decodeRawTxRow(sig, raw, meta);
+        const { row, onChainPath } = decodeRawTxRow(sig, raw, meta);
         if (row) {
           results.set(sig, row);
         } else {
           // null = non-row tx or session/linked-list — try full SDK decode
-          preloadMap.set(sig, { signer: meta.signer, blockTime: meta.blockTime });
+          preloadMap.set(sig, { signer: meta.signer, blockTime: meta.blockTime, onChainPath });
           needsFullDecode.push(sig);
         }
       }
