@@ -11,6 +11,7 @@
 
 import { CatalogEntry, upsertCatalogEntries, upsertCatalogEntry } from "./catalog";
 import { getCachedDbRoots } from "../routes/dbroots";
+import { recoverLegacyDbRootLabel } from "./legacy-dbroot-labels";
 
 // Pull human-readable text out of an arbitrary row payload. Keys are scanned
 // in a fixed order so the most likely "title" winds up at the front of the
@@ -108,7 +109,11 @@ export async function backfillFromDbRoots(): Promise<{ dbroots: number; tables: 
   let tables = 0;
 
   for (const d of payload.dbroots) {
-    const dbrootLabel = d.id ?? d.idHex.slice(0, 16);
+    // LEGACY: recoverLegacyDbRootLabel returns the raw id when available, or
+    // a dictionary-resolved label for legacy hashed DbRoots (pre-2026-04-06).
+    // Falls through to short hex only for truly unknown roots.
+    const dbrootLabel =
+      recoverLegacyDbRootLabel(d.id, d.idHex) ?? d.idHex.slice(0, 16);
     entries.push({
       kind: "dbroot",
       id: d.pda,

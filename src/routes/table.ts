@@ -201,6 +201,26 @@ async function resolveRowsFromSignatures(signatures: string[]): Promise<Record<s
 // Cold path: full fetch (sigs + rows). Used on cache miss and on disk-cache
 // hits that need to be re-promoted to memory. Returns the entry so callers
 // can respond immediately without re-reading the cache.
+// Fire-and-forget catalog ingest for a freshly-loaded batch of rows. Used by
+// both the cold-fetch path and the disk-cache promote path so the FTS5 index
+// catches up with whatever the cache layer just learned.
+function lazyIngestRows(tablePda: string, rows: Row[]): void {
+  if (rows.length === 0) return;
+  void (async () => {
+    try {
+      const meta = await getTableMetaCached(tablePda);
+      const tableLabel = meta?.name ?? tablePda;
+      for (const row of rows) {
+        const sig = (row as { __txSignature?: string }).__txSignature;
+        if (!sig) continue;
+        await ingestRow({ row: row as Record<string, unknown>, sig, dbrootLabel: "", tableLabel });
+      }
+    } catch (e) {
+      console.warn("[catalog] lazy ingest failed:", e instanceof Error ? e.message : e);
+    }
+  })();
+}
+
 async function fetchRowsCold(
   tablePda: string,
   key: string,
@@ -219,6 +239,12 @@ async function fetchRowsCold(
   rowsCache.set(key, entry, ttl);
   if (rows.length > 0) setDiskCache("rows", key, json).catch(() => {});
   console.log(`[rows] ${tablePda.slice(0,8)} sigs=${signatures.length} rows=${rows.length}`);
+
+  // Lazy catalog ingest: cold fetches mean these rows weren't in our search
+  // index yet. Stamp them now so future searches find them without us
+  // having to walk every row at boot.
+  lazyIngestRows(tablePda, rows);
+
   return entry;
 }
 
@@ -340,6 +366,9 @@ tableRouter.get("/:tablePda/rows", async (c) => {
         ? { json, rows: (JSON.parse(json).rows ?? []) as Row[] }
         : { json };
       rowsCache.set(key, entry, ttl);
+      // Lazy ingest on disk promote: the FTS5 index lives in a separate
+      // table that disk-cache promotion alone doesn't touch.
+      if (isHead && entry.rows) lazyIngestRows(tablePda, entry.rows);
       return respondWithEtag(c, { ...JSON.parse(json), cached: true }, etagFor(json));
     }
   }
