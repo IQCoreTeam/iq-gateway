@@ -2,7 +2,7 @@
 // Single pass: scan program txs, decode everything, cache full content.
 // After backfill, all historical data is served from disk — zero RPC needed.
 
-import { isHeliusEnabled, HELIUS_RPC, heliusGetTransactionsForAddress } from "./chain";
+import { isHeliusEnabled, HELIUS_RPC, heliusGetTransactionsForAddress, enqueueRpc } from "./chain";
 import { getDiskCache, setDiskCache } from "./cache";
 import { existsSync, readFileSync, writeFileSync, unlinkSync } from "node:fs";
 import { join } from "node:path";
@@ -78,30 +78,29 @@ async function backfill(fromSlot: number) {
   const startTime = Date.now();
 
   while (true) {
-    const res = await fetch(HELIUS_RPC!, {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({
-        jsonrpc: "2.0",
-        id: 1,
-        method: "getTransactionsForAddress",
-        params: [PROGRAM_ID, {
-          limit: 100,
-          transactionDetails: "full",
-          sortOrder: "asc",
-          ...(paginationToken ? { paginationToken } : {}),
-        }],
-      }),
+    const json = await enqueueRpc("background", async () => {
+      const res = await fetch(HELIUS_RPC!, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          jsonrpc: "2.0",
+          id: 1,
+          method: "getTransactionsForAddress",
+          params: [PROGRAM_ID, {
+            limit: 100,
+            transactionDetails: "full",
+            sortOrder: "asc",
+            ...(paginationToken ? { paginationToken } : {}),
+          }],
+        }),
+      });
+      if (!res.ok) throw new Error(`gTFA HTTP ${res.status}`);
+      return await res.json() as { result?: { data?: any[]; paginationToken?: string } };
+    }).catch((e) => {
+      console.error(`[backfill] gTFA failed: ${e instanceof Error ? e.message : e}`);
+      return null;
     });
-
-    if (!res.ok) {
-      console.error(`[backfill] gTFA error: HTTP ${res.status}`);
-      break;
-    }
-
-    const json = await res.json() as {
-      result?: { data?: any[]; paginationToken?: string };
-    };
+    if (!json) break;
 
     const data = json.result?.data ?? [];
     if (data.length === 0) break;
@@ -151,7 +150,7 @@ async function backfill(fromSlot: number) {
       // For session files: read all chunks via gTFA on the session PDA
       if (onChainPath && onChainPath.length < 80) {
         try {
-          const sessionTxs = await heliusGetTransactionsForAddress(onChainPath);
+          const sessionTxs = await heliusGetTransactionsForAddress(onChainPath, 10000, "background");
           const chunkMap = new Map<number, string>();
 
           for (const stx of sessionTxs) {

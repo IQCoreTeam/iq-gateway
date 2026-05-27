@@ -19,6 +19,8 @@ import {
   gateRouter,
   dbrootsRouter,
   searchRouter,
+  adminRouter,
+  isAdminEnabled,
 } from "./routes";
 import { startBackfill } from "./backfill";
 import { startCatalogBackfillJob } from "./cache/catalog-ingest";
@@ -97,6 +99,10 @@ app.route("/cache", cacheRouter);
 app.route("/gate", gateRouter);
 app.route("/dbroots", dbrootsRouter);
 app.route("/search", searchRouter);
+if (isAdminEnabled()) {
+  app.route("/admin", adminRouter);
+  console.log("[admin] /admin routes enabled (ADMIN_TOKEN set)");
+}
 
 // OpenAPI spec + Swagger UI.
 app.get("/openapi.json", (c) => c.json(openapiSpec));
