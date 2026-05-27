@@ -29,21 +29,43 @@ export interface SearchHit extends CatalogEntry {
   rank: number;
 }
 
+// Schema includes the prefix='2 3' option so 2- and 3-character queries
+// (e.g. "zo", "gm") lookup directly instead of scanning the whole index.
+// trigram tokenizer already handles 3+ char substrings, but its smallest
+// indexable unit is one trigram (3 chars), so a 2-char query alone has no
+// trigram to match against — the prefix index covers that gap.
+const SCHEMA_SQL = `
+  CREATE VIRTUAL TABLE catalog_fts USING fts5(
+    kind UNINDEXED,
+    id UNINDEXED,
+    dbroot,
+    label,
+    snippet,
+    body,
+    tokenize='trigram',
+    prefix='2 3'
+  )
+`;
+
 let prepared = false;
 
 function prepare(db: Database) {
   if (prepared) return;
-  db.run(`
-    CREATE VIRTUAL TABLE IF NOT EXISTS catalog_fts USING fts5(
-      kind UNINDEXED,
-      id UNINDEXED,
-      dbroot,
-      label,
-      snippet,
-      body,
-      tokenize='trigram'
+  // Migrate older schemas (no prefix index) by detecting their CREATE SQL in
+  // sqlite_master and dropping. Index is rebuilt by the next backfill /
+  // ingest call. Idempotent: a fresh install just creates and skips the drop.
+  const existing = db
+    .query<{ sql: string }, []>(
+      "SELECT sql FROM sqlite_master WHERE type='table' AND name='catalog_fts'",
     )
-  `);
+    .get();
+  if (existing && !existing.sql.includes("prefix='2 3'")) {
+    console.log("[catalog] migrating catalog_fts: adding prefix='2 3'");
+    db.run("DROP TABLE catalog_fts");
+  }
+  if (!existing || !existing.sql.includes("prefix='2 3'")) {
+    db.run(SCHEMA_SQL);
+  }
   prepared = true;
 }
 
