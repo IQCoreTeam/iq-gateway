@@ -13,12 +13,13 @@
 import { Hono } from "hono";
 import { Database } from "bun:sqlite";
 import { createHash } from "node:crypto";
-import { existsSync } from "node:fs";
-import { lstat, open, realpath } from "node:fs/promises";
+import { existsSync, mkdirSync } from "node:fs";
+import { lstat, open, realpath, rename, stat } from "node:fs/promises";
 import { join, relative, resolve } from "node:path";
 import { metaCache, imageCache, userStateCache } from "../cache/memory";
 import { snsCache, snsInflight } from "../chain/sns";
 import { rowsCache, indexCache, sliceCache, inflight as tableInflight } from "./table";
+import { checkAdminAuth } from "./admin";
 
 const CACHE_DIR = process.env.CACHE_DIR || "./cache";
 const CACHE_ROOT = resolve(CACHE_DIR);
@@ -481,22 +482,25 @@ cacheRouter.get("/memory", (c) => {
   });
 });
 
-cacheRouter.get("/snapshot", async (c) => {
+// Stage CACHE_DIR's blobs + a fresh VACUUM-INTO cache.db into a tmp dir.
+// Caller is responsible for `rm -rf` of the returned path. Returns null
+// on setup failure (with stderr already logged).
+async function buildSnapshotStage(): Promise<{ stage: string } | { error: string }> {
   const tag = `${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
   const stage = `/tmp/cache-snapshot-${tag}`;
 
-  // Stage every cache subdir / blob file. Skip the live cache.db and
-  // its WAL/SHM journals — we'll write a fresh consistent cache.db via
-  // VACUUM INTO so the recipient sqlite opens cleanly.
+  // Excludes the live DB (we VACUUM INTO a fresh one below) and the
+  // backups/ subdirectory (otherwise each backup would nest the previous
+  // one — quadratic growth across redeploys).
   const setup = await runShell([
     "set -e",
     `mkdir -p ${stage}`,
     `cd ${CACHE_DIR}`,
-    `find . -mindepth 1 -maxdepth 1 -not -name 'cache.db' -not -name 'cache.db-shm' -not -name 'cache.db-wal' -exec cp -r {} ${stage}/ \\;`,
+    `find . -mindepth 1 -maxdepth 1 -not -name 'cache.db' -not -name 'cache.db-shm' -not -name 'cache.db-wal' -not -name 'backups' -exec cp -r {} ${stage}/ \\;`,
   ].join(" && "));
   if (setup.exitCode !== 0) {
     await runShell(`rm -rf ${stage}`);
-    return c.json({ error: "snapshot setup failed", stderr: setup.stderr }, 500);
+    return { error: setup.stderr };
   }
 
   const liveDb = dbPath();
@@ -511,12 +515,18 @@ cacheRouter.get("/snapshot", async (c) => {
       await runShell(`cp ${liveDb} ${join(stage, "cache.db")}`);
     }
   }
+  return { stage };
+}
+
+cacheRouter.get("/snapshot", async (c) => {
+  const built = await buildSnapshotStage();
+  if ("error" in built) return c.json({ error: "snapshot setup failed", stderr: built.error }, 500);
 
   // Stream tar's stdout directly to the client. Bytes start flowing
   // immediately — no buffer-to-file step. Avoids Cloudflare 100s
   // timeouts on large caches and keeps memory low.
   const tar = Bun.spawn(
-    ["sh", "-c", `cd ${stage} && tar -czf - . ; status=$? ; rm -rf ${stage} ; exit $status`],
+    ["sh", "-c", `cd ${built.stage} && tar -czf - . ; status=$? ; rm -rf ${built.stage} ; exit $status`],
     { stdout: "pipe", stderr: "pipe" },
   );
 
@@ -527,4 +537,75 @@ cacheRouter.get("/snapshot", async (c) => {
       "x-cache-snapshot-version": "2",
     },
   });
+});
+
+// POST /cache/backup — write a tar.gz to BACKUP_DIR/latest.tar.gz. Operators
+// curl this before `docker compose up -d --build` so the snapshot lives in
+// the PV (which is retained across redeploys). Atomic rename so a crashed
+// backup never leaves a half-written file behind.
+//
+// Default BACKUP_DIR is inside CACHE_DIR so it inherits the PV mount with
+// zero extra config — the snapshot routine knows to skip the `backups/`
+// subdir so backups don't recursively pack previous backups.
+//
+// Auth: admin-only. Same Bearer token as /admin/*. If ADMIN_TOKEN is unset,
+// the endpoint returns 401 (writing to the PV is not a public action).
+const BACKUP_DIR = process.env.BACKUP_DIR || join(CACHE_DIR, "backups");
+const BACKUP_FILE = join(BACKUP_DIR, "latest.tar.gz");
+
+// Single in-flight backup at a time. Two concurrent backups would race on
+// the same .tmp path and produce a truncated latest.tar.gz.
+let backupRunning = false;
+
+cacheRouter.post("/backup", async (c) => {
+  if (!checkAdminAuth(c.req.header("authorization"))) {
+    return c.json({ error: "unauthorized" }, 401);
+  }
+  if (backupRunning) {
+    return c.json({ error: "backup already in progress" }, 409);
+  }
+  backupRunning = true;
+  try {
+    mkdirSync(BACKUP_DIR, { recursive: true });
+    const built = await buildSnapshotStage();
+    if ("error" in built) return c.json({ error: "snapshot setup failed", stderr: built.error }, 500);
+
+    const tmp = `${BACKUP_FILE}.tmp`;
+    const tar = Bun.spawn(
+      ["sh", "-c", `cd ${built.stage} && tar -czf ${tmp} . ; status=$? ; rm -rf ${built.stage} ; exit $status`],
+      { stdout: "pipe", stderr: "pipe" },
+    );
+    const exit = await tar.exited;
+    if (exit !== 0) {
+      const stderr = await new Response(tar.stderr).text();
+      await runShell(`rm -f ${tmp}`);
+      return c.json({ error: "tar failed", stderr }, 500);
+    }
+
+    await rename(tmp, BACKUP_FILE);
+    const info = await stat(BACKUP_FILE);
+    return c.json({
+      path: BACKUP_FILE,
+      sizeBytes: info.size,
+      writtenAt: Date.now(),
+    });
+  } finally {
+    backupRunning = false;
+  }
+});
+
+cacheRouter.get("/backup", async (c) => {
+  // Operators inspect what's currently sitting in BACKUP_DIR before
+  // redeploying. No auth — read-only metadata, no contents.
+  try {
+    const info = await stat(BACKUP_FILE);
+    return c.json({
+      exists: true,
+      path: BACKUP_FILE,
+      sizeBytes: info.size,
+      modifiedAt: info.mtimeMs,
+    });
+  } catch {
+    return c.json({ exists: false, path: BACKUP_FILE });
+  }
 });

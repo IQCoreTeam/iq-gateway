@@ -10,6 +10,7 @@ import {
   heliusGetSignatures,
   heliusBatchGetTransactions,
 } from "./helius";
+import { enqueueRpc, getQueueStats, type Priority } from "./rpc-queue";
 
 const PRIMARY_RPC = HELIUS_RPC || process.env.SOLANA_RPC_ENDPOINT || "https://api.mainnet-beta.solana.com";
 const FALLBACK_RPC = process.env.SOLANA_RPC_ENDPOINT || "https://api.mainnet-beta.solana.com";
@@ -19,39 +20,6 @@ let solConnection = new Connection(PRIMARY_RPC);
 
 if (isHeliusEnabled()) {
   console.log("[reader] Helius RPC enabled — using batch transactions + enhanced endpoints");
-}
-
-// ─── Global RPC rate limiter ─────────────────────────────────────────────────
-
-const defaultMaxTokens = isHeliusEnabled() ? 100 : 30;
-const defaultRefillRate = isHeliusEnabled() ? 50 : 10;
-
-const RATE_LIMIT = {
-  maxTokens: Number(process.env.RPC_RATE_LIMIT) || defaultMaxTokens,
-  refillRate: Number(process.env.RPC_REFILL_RATE) || defaultRefillRate,
-  tokens: Number(process.env.RPC_RATE_LIMIT) || defaultMaxTokens,
-  lastRefill: Date.now(),
-};
-
-function acquireToken(): boolean {
-  const now = Date.now();
-  const elapsed = (now - RATE_LIMIT.lastRefill) / 1000;
-  RATE_LIMIT.tokens = Math.min(RATE_LIMIT.maxTokens, RATE_LIMIT.tokens + elapsed * RATE_LIMIT.refillRate);
-  RATE_LIMIT.lastRefill = now;
-
-  if (RATE_LIMIT.tokens < 1) return false;
-  RATE_LIMIT.tokens -= 1;
-  return true;
-}
-
-async function waitForToken(timeoutMs = 10_000): Promise<void> {
-  const start = Date.now();
-  while (!acquireToken()) {
-    if (Date.now() - start > timeoutMs) {
-      throw new Error("RPC rate limit exceeded — try again later");
-    }
-    await new Promise(r => setTimeout(r, 100));
-  }
 }
 
 // ─── RPC metrics ─────────────────────────────────────────────────────────────
@@ -68,52 +36,57 @@ export function getRpcMetrics() {
   return {
     ...metrics,
     heliusEnabled: isHeliusEnabled(),
-    availableTokens: Math.floor(RATE_LIMIT.tokens),
-    maxTokens: RATE_LIMIT.maxTokens,
-    refillRate: RATE_LIMIT.refillRate,
+    queue: getQueueStats(),
   };
 }
 
-// ─── Retry with rate limiting ────────────────────────────────────────────────
+// ─── Queue + retry wrapper ───────────────────────────────────────────────────
+//
+// Every call goes through the in-process queue (src/chain/rpc-queue.ts). The
+// retry logic stays here — it's about RPC failure modes, not scheduling, so it
+// runs inside the job after admission. 429 backoffs voluntarily yield the slot
+// before retrying so a struggling key doesn't hog concurrency.
 
-async function withRetry<T>(fn: () => Promise<T>, maxRetries = 2): Promise<T> {
-  await waitForToken();
-  metrics.totalCalls++;
+async function withRetry<T>(
+  fn: () => Promise<T>,
+  priority: Priority = "interactive",
+  maxRetries = 2,
+): Promise<T> {
+  return enqueueRpc(priority, async () => {
+    metrics.totalCalls++;
+    for (let i = 0; i <= maxRetries; i++) {
+      try {
+        return await fn();
+      } catch (e) {
+        const msg = e instanceof Error ? e.message : String(e);
 
-  for (let i = 0; i <= maxRetries; i++) {
-    try {
-      return await fn();
-    } catch (e) {
-      const msg = e instanceof Error ? e.message : String(e);
-
-      // 429 rate limited by RPC provider — back off exponentially
-      if (msg.includes("429") && i < maxRetries) {
-        metrics.rateLimited++;
-        const delay = 1000 * 2 ** i;
-        console.warn(`[reader] 429 rate-limited, retry ${i + 1}/${maxRetries} after ${delay}ms`);
-        await new Promise(r => setTimeout(r, delay));
-        continue;
-      }
-
-      // Connection errors — try fallback RPC once
-      if (i === 0 && (msg.includes("fetch failed") || msg.includes("ECONNREFUSED") || msg.includes("503") || msg.includes("max usage reached"))) {
-        metrics.fallbacks++;
-        console.warn(`[reader] Primary RPC failed (${msg}), trying fallback`);
-        iqlabs.setRpcUrl(FALLBACK_RPC);
-        solConnection = new Connection(FALLBACK_RPC);
-        try {
-          return await fn();
-        } finally {
-          iqlabs.setRpcUrl(PRIMARY_RPC);
-          solConnection = new Connection(PRIMARY_RPC);
+        if (msg.includes("429") && i < maxRetries) {
+          metrics.rateLimited++;
+          const delay = 1000 * 2 ** i;
+          console.warn(`[reader] 429 rate-limited, retry ${i + 1}/${maxRetries} after ${delay}ms`);
+          await new Promise(r => setTimeout(r, delay));
+          continue;
         }
-      }
 
-      metrics.errors++;
-      throw e;
+        if (i === 0 && (msg.includes("fetch failed") || msg.includes("ECONNREFUSED") || msg.includes("503") || msg.includes("max usage reached"))) {
+          metrics.fallbacks++;
+          console.warn(`[reader] Primary RPC failed (${msg}), trying fallback`);
+          iqlabs.setRpcUrl(FALLBACK_RPC);
+          solConnection = new Connection(FALLBACK_RPC);
+          try {
+            return await fn();
+          } finally {
+            iqlabs.setRpcUrl(PRIMARY_RPC);
+            solConnection = new Connection(PRIMARY_RPC);
+          }
+        }
+
+        metrics.errors++;
+        throw e;
+      }
     }
-  }
-  throw new Error("unreachable");
+    throw new Error("unreachable");
+  });
 }
 
 // ─── Public API ──────────────────────────────────────────────────────────────
@@ -180,10 +153,10 @@ export async function fetchRecentSignatures(
   before?: string,
 ): Promise<string[]> {
   if (isHeliusEnabled()) {
-    metrics.heliusCalls++;
-    metrics.totalCalls++;
     try {
-      return await heliusGetSignatures(tablePda, limit, before);
+      metrics.heliusCalls++;
+      metrics.totalCalls++;
+      return await heliusGetSignatures(tablePda, limit, before, "interactive");
     } catch (e) {
       console.warn("[reader] Helius sig fetch failed, falling back:", e instanceof Error ? e.message : e);
     }
@@ -324,17 +297,19 @@ export async function fetchSignatureIndex(
   tablePda: string,
   maxSignatures = 10000,
 ): Promise<string[]> {
+  // Heavy: paginates getSignaturesForAddress up to maxSignatures. Per-page
+  // queue priority is "background" so it can't crowd out live row reads.
   if (isHeliusEnabled()) {
-    metrics.heliusCalls++;
-    metrics.totalCalls++;
     try {
-      return await heliusGetAllSignatures(tablePda, maxSignatures);
+      metrics.heliusCalls++;
+      metrics.totalCalls++;
+      return await heliusGetAllSignatures(tablePda, maxSignatures, "background");
     } catch (e) {
       console.warn("[reader] Helius index fetch failed, falling back:", e instanceof Error ? e.message : e);
     }
   }
 
-  return withRetry(() => iqlabs.reader.collectSignatures(tablePda, maxSignatures));
+  return withRetry(() => iqlabs.reader.collectSignatures(tablePda, maxSignatures), "background");
 }
 
 export async function readRowsBySignatures(
@@ -359,10 +334,10 @@ export async function readMultipleRows(
   const preloadMap = new Map<string, { signer?: string; blockTime?: number; onChainPath?: string }>();
 
   if (isHeliusEnabled()) {
-    metrics.heliusCalls++;
-    metrics.totalCalls++;
     try {
-      const txMap = await heliusBatchGetTransactions(signatures);
+      metrics.heliusCalls++;
+      metrics.totalCalls++;
+      const txMap = await heliusBatchGetTransactions(signatures, "background");
       for (const sig of signatures) {
         const raw = txMap.get(sig);
         if (!raw) { results.set(sig, null); continue; }

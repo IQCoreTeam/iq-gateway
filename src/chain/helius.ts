@@ -1,7 +1,13 @@
 // Helius RPC helpers — uses gTFA (getTransactionsForAddress) for fast bulk reads.
 // Requires a paid Helius plan. Gracefully disabled when no API key is set.
+//
+// Every HTTP call is admitted through the in-process queue (rpc-queue.ts) so
+// concurrency/min-time/depth are enforced at the only chokepoint that matters
+// (the outbound HTTP). Multi-page operations enqueue per page — that way a
+// 10k-sig scan doesn't sit on one slot for 30s while live requests starve.
 
 import type { VersionedTransactionResponse } from "@solana/web3.js";
+import { enqueueRpc, type Priority } from "./rpc-queue";
 
 const cluster = process.env.SOLANA_CLUSTER || "devnet";
 
@@ -32,20 +38,22 @@ if (HELIUS_KEYS.length > 1) {
 
 // ─── JSON-RPC helper with key fallback on 429 ─────────────────────────────
 
-async function rpc(body: object): Promise<any> {
+async function rpc(body: object, priority: Priority): Promise<any> {
   if (!HELIUS_RPC_BASE || HELIUS_KEYS.length === 0) throw new Error("Helius not configured");
 
-  for (let i = 0; i < HELIUS_KEYS.length; i++) {
-    const url = `${HELIUS_RPC_BASE}/?api-key=${HELIUS_KEYS[i]}`;
-    const res = await fetch(url, {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify(body),
-    });
-    if (res.status === 429 && i < HELIUS_KEYS.length - 1) continue;
-    if (!res.ok) throw new Error(`Helius RPC error: HTTP ${res.status}`);
-    return res.json();
-  }
+  return enqueueRpc(priority, async () => {
+    for (let i = 0; i < HELIUS_KEYS.length; i++) {
+      const url = `${HELIUS_RPC_BASE}/?api-key=${HELIUS_KEYS[i]}`;
+      const res = await fetch(url, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(body),
+      });
+      if (res.status === 429 && i < HELIUS_KEYS.length - 1) continue;
+      if (!res.ok) throw new Error(`Helius RPC error: HTTP ${res.status}`);
+      return res.json();
+    }
+  });
 }
 
 // ─── gTFA: getTransactionsForAddress ───────────────────────────────────────
@@ -56,6 +64,7 @@ async function rpc(body: object): Promise<any> {
 export async function heliusGetTransactionsForAddress(
   address: string,
   maxTxs = 10000,
+  priority: Priority = "background",
 ): Promise<VersionedTransactionResponse[]> {
   const all: VersionedTransactionResponse[] = [];
   let paginationToken: string | undefined;
@@ -70,7 +79,7 @@ export async function heliusGetTransactionsForAddress(
         transactionDetails: "full",
         ...(paginationToken ? { paginationToken } : {}),
       }],
-    });
+    }, priority);
 
     const result = json.result;
     if (!result) break;
@@ -90,6 +99,7 @@ export async function heliusGetTransactionsForAddress(
 
 export async function heliusBatchGetTransactions(
   signatures: string[],
+  priority: Priority = "background",
 ): Promise<Map<string, VersionedTransactionResponse | null>> {
   const results = new Map<string, VersionedTransactionResponse | null>();
   if (signatures.length === 0) return results;
@@ -101,7 +111,7 @@ export async function heliusBatchGetTransactions(
     params: [sig, { maxSupportedTransactionVersion: 0, encoding: "json" }],
   }));
 
-  const responses = await rpc(batch) as Array<{ id: number; result?: VersionedTransactionResponse | null; error?: unknown }>;
+  const responses = await rpc(batch, priority) as Array<{ id: number; result?: VersionedTransactionResponse | null; error?: unknown }>;
 
   for (const resp of responses) {
     const sig = signatures[resp.id];
@@ -117,13 +127,14 @@ export async function heliusGetSignatures(
   address: string,
   limit = 50,
   before?: string,
+  priority: Priority = "interactive",
 ): Promise<string[]> {
   const json = await rpc({
     jsonrpc: "2.0",
     id: 1,
     method: "getSignaturesForAddress",
     params: [address, { limit, ...(before && { before }) }],
-  });
+  }, priority);
   const sigs = (json.result || []).map((s: { signature: string }) => s.signature);
   return sigs;
 }
@@ -131,13 +142,14 @@ export async function heliusGetSignatures(
 export async function heliusGetAllSignatures(
   address: string,
   maxSigs = 10000,
+  priority: Priority = "background",
 ): Promise<string[]> {
   const allSigs: string[] = [];
   let before: string | undefined;
 
   while (allSigs.length < maxSigs) {
     const limit = Math.min(1000, maxSigs - allSigs.length);
-    const page = await heliusGetSignatures(address, limit, before);
+    const page = await heliusGetSignatures(address, limit, before, priority);
     if (page.length === 0) break;
 
     allSigs.push(...page);
