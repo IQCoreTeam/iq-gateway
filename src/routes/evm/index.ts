@@ -10,4 +10,3 @@ export { gateRouter } from "./gate";
 export { ensRouter } from "./ens";
 export { cacheRouter } from "./cache-snapshot";
 export { dbrootsRouter } from "./dbroots";
-export { searchRouter } from "./search";

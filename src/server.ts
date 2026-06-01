@@ -83,7 +83,9 @@ if (EVM) {
   });
 
   const r = await import("./routes/evm/index");
-  const { adminRouter, isAdminEnabled } = await import("./routes/evm/admin");
+  // search + admin are chain-agnostic — shared with the Solana boot path.
+  const { searchRouter } = await import("./routes/search");
+  const { adminRouter, isAdminEnabled } = await import("./routes/admin");
   const { openapiSpec } = await import("./openapi.evm");
   const { homeHandler } = await import("./routes/evm/home");
   const { startCatalogBackfillJob } = await import("./cache/catalog-ingest.evm");
@@ -99,7 +101,7 @@ if (EVM) {
   app.route("/cache", r.cacheRouter);
   app.route("/gate", r.gateRouter);
   app.route("/dbroots", r.dbrootsRouter);
-  app.route("/search", r.searchRouter);
+  app.route("/search", searchRouter);
   if (isAdminEnabled()) {
     app.route("/admin", adminRouter);
     console.log("[admin] /admin routes enabled (ADMIN_TOKEN set)");

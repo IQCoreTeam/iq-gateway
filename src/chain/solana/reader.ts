@@ -10,7 +10,7 @@ import {
   heliusGetSignatures,
   heliusBatchGetTransactions,
 } from "./helius";
-import { enqueueRpc, getQueueStats, type Priority } from "./rpc-queue";
+import { enqueueRpc, getQueueStats, type Priority } from "../rpc-queue";
 
 const PRIMARY_RPC = HELIUS_RPC || process.env.SOLANA_RPC_ENDPOINT || "https://api.mainnet-beta.solana.com";
 const FALLBACK_RPC = process.env.SOLANA_RPC_ENDPOINT || "https://api.mainnet-beta.solana.com";

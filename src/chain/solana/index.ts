@@ -2,4 +2,4 @@ export { readAsset, listUserAssets, listUserSessions, readUserState, fetchUserCo
 export { isHeliusEnabled, HELIUS_RPC, heliusGetTransactionsForAddress } from "./helius";
 export { getSignerSigs } from "./signer-index";
 export { readTableMeta, getTableMetaCached } from "./meta";
-export { enqueueRpc, getQueueStats, getQueueConfig, setQueueConfig, type Priority } from "./rpc-queue";
+export { enqueueRpc, getQueueStats, getQueueConfig, setQueueConfig, type Priority } from "../rpc-queue";

@@ -7,7 +7,7 @@ import { createHash } from "node:crypto";
 import { existsSync, mkdirSync } from "node:fs";
 import { lstat, open, realpath, rename, stat } from "node:fs/promises";
 import { join, relative, resolve } from "node:path";
-import { checkAdminAuth } from "./admin";
+import { checkAdminAuth } from "../admin";
 import { metaCache, imageCache, userStateCache } from "../../cache/memory";
 import { ensCache, ensInflight } from "../../chain/evm/ens";
 import { rowsCache, indexCache, sliceCache, inflight as tableInflight } from "./table";

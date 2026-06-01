@@ -11,7 +11,7 @@ import iqlabs from "@iqlabs-official/ethereum-sdk";
 import { NetworkMode, NETWORKS, isNetworkMode } from "./networks";
 import { isAlchemyEnabled, alchemyRpcUrl } from "./alchemy";
 import { recordSignerSig } from "./signer-index";
-import { enqueueRpc, getQueueStats } from "./rpc-queue";
+import { enqueueRpc, getQueueStats } from "../rpc-queue";
 
 // Import-safe network resolution. In Solana mode (IQ_CHAIN!=evm) this module
 // may still be imported by the chain barrel, so we must NOT throw here. The
@@ -68,7 +68,7 @@ export function getRpcMetrics() {
 async function withRetry<T>(
   fn: () => Promise<T>,
   maxRetries = 2,
-  priority: import("./rpc-queue").Priority = "interactive",
+  priority: import("../rpc-queue").Priority = "interactive",
 ): Promise<T> {
   metrics.totalCalls++;
 

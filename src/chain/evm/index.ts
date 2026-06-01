@@ -25,4 +25,4 @@ export { getSignerSigs } from "./signer-index";
 export { getTableMetaCached } from "./meta";
 export type { TableMeta } from "./meta";
 export { resolveEns, reverseEns, ensCache, ensInflight } from "./ens";
-export { enqueueRpc, getQueueStats, getQueueConfig, setQueueConfig, type Priority } from "./rpc-queue";
+export { enqueueRpc, getQueueStats, getQueueConfig, setQueueConfig, type Priority } from "../rpc-queue";
