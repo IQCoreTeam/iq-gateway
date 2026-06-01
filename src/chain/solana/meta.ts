@@ -1,6 +1,6 @@
 import { Connection, PublicKey } from "@solana/web3.js";
 import { reader as sdkReader } from "@iqlabs-official/solana-sdk";
-import { MemoryCache } from "../cache";
+import { MemoryCache } from "../../cache";
 
 const NULL_MINT = "11111111111111111111111111111111";
 const META_TTL = 5 * 60 * 1000; // 5min — table metadata rarely changes

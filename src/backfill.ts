@@ -2,7 +2,7 @@
 // Single pass: scan program txs, decode everything, cache full content.
 // After backfill, all historical data is served from disk — zero RPC needed.
 
-import { isHeliusEnabled, HELIUS_RPC, heliusGetTransactionsForAddress, enqueueRpc } from "./chain";
+import { isHeliusEnabled, HELIUS_RPC, heliusGetTransactionsForAddress, enqueueRpc } from "./chain/solana";
 import { getDiskCache, setDiskCache } from "./cache";
 import { existsSync, readFileSync, writeFileSync, unlinkSync } from "node:fs";
 import { join } from "node:path";

@@ -1,5 +1,5 @@
 import { Hono } from "hono";
-import { readAsset, generateETag, decodeAssetData, detectImageType } from "../chain";
+import { readAsset, generateETag, decodeAssetData, detectImageType } from "../chain/solana";
 import { imageCache, TTL, getDiskCache, setDiskCache } from "../cache";
 import { escapeMarkup } from "./render";
 

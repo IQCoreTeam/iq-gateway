@@ -1,9 +1,9 @@
 import { Hono } from "hono";
 import pkg from "../../package.json" with { type: "json" };
 import { metaCache, imageCache, userStateCache } from "../cache/memory";
-import { snsCache, snsInflight } from "../chain/sns";
+import { snsCache, snsInflight } from "../chain/solana/sns";
 import { getStats } from "../cache/store";
-import { getRpcMetrics } from "../chain";
+import { getRpcMetrics } from "../chain/solana";
 import { rowsCache, indexCache, sliceCache, inflight } from "./table";
 
 export const healthRouter = new Hono();

@@ -1,12 +1,21 @@
 # IQ Gateway
 
-A read-only HTTP cache for on-chain data stored on Solana via IQ Labs. Fetches data from the blockchain and serves it over HTTP with multi-tier caching. Anyone can run their own gateway.
+A read-only HTTP cache for IQ Labs on-chain data. Fetches from the blockchain and serves it over HTTP with multi-tier caching. Anyone can run their own gateway.
+
+**One codebase, two chains.** A single `IQ_CHAIN` env var selects the backend:
+
+- `IQ_CHAIN=solana` (default) — Solana (devnet / mainnet-beta / testnet) via [solana-sdk](https://www.npmjs.com/package/@iqlabs-official/solana-sdk)
+- `IQ_CHAIN=evm` — EVM chains (Sepolia / Monad / Monad Testnet) via [ethereum-sdk](https://www.npmjs.com/package/@iqlabs-official/ethereum-sdk)
+
+Cache, RPC queue, ETag/304, SSE, and the server shell are shared. The chain
+adapter, route set, OpenAPI spec, and home page are selected per process. See
+[Architecture](#architecture) and [Chains](#chains).
 
 ## Why Run Your Own?
 
 - **No single point of failure** - if one gateway goes down, spin up another
 - **Your own cache** - faster for your users, your region
-- **Data is always recoverable** - everything lives on Solana, any gateway can serve it
+- **Data is always recoverable** - everything lives on-chain, any gateway can serve it
 - **No vendor lock-in** - switch gateways anytime, same data
 
 ## Quick Start
@@ -18,10 +27,19 @@ bun install
 cp .env.example .env
 ```
 
-Edit `.env`:
+**Solana** (`.env`):
 ```
+IQ_CHAIN=solana
 SOLANA_CLUSTER=mainnet-beta
 SOLANA_RPC_ENDPOINT=https://api.mainnet-beta.solana.com
+PORT=3000
+```
+
+**EVM** (`.env`):
+```
+IQ_CHAIN=evm
+IQETH_NETWORK=sepolia                       # sepolia | monad | monadTestnet
+IQETH_RPC_ENDPOINT=https://rpc.sepolia.org
 PORT=3000
 ```
 
@@ -32,7 +50,44 @@ bun run dev
 
 That's it. Your gateway is live at `http://localhost:3000`.
 
+## Chains
+
+One process = one chain (fault isolation; matches the Solana cluster model). The
+chain is fixed at boot by `IQ_CHAIN`; the network within it by `SOLANA_CLUSTER`
+(Solana) or `IQETH_NETWORK` (EVM).
+
+| | Solana (`IQ_CHAIN=solana`) | EVM (`IQ_CHAIN=evm`) |
+|---|---|---|
+| tx identifier | `signature` (base58, 86–90) | `txHash` (`0x` + 64 hex) |
+| wallet / account | base58 pubkey | `0x` 20-byte address |
+| table key | table PDA — `/table/{pda}/…` | `dbRootId` + `tableName` — `/table/{dbRootId}/{tableName}/…` |
+| row tx field | `__txSignature` | `__txHash` |
+| name service | SNS (`/sns/…`, `*.sol.site`) | ENS (`/ens/…`) |
+| token gate | SPL balance / ATA | ERC-20 / native balance |
+| site hosting | `/site/…` (manifest) | — (not in v1) |
+| fast reads | Helius (gTFA + batch) | Alchemy (batch + higher limits) |
+
+**EVM networks:**
+
+| Network | Chain ID | Contract |
+|---|---|---|
+| sepolia | 11155111 | 0x246A08D9fdD9b3990A88eD1f2DF1A87239839F07 |
+| monad | 143 | 0x7ae06f87Cf93606DA2BD6A281afB28028cAE233D |
+| monadTestnet | 10143 | 0x3379883538C068978e199472b5D127055c734867 |
+
 ## Configuration
+
+**Shared**
+
+| Variable | Required | Description |
+|----------|----------|-------------|
+| `IQ_CHAIN` | No | `solana` (default) or `evm` — selects the chain adapter + route set |
+| `PORT` | No | Server port (default: 3000) |
+| `BASE_PATH` | No | URL prefix if behind reverse proxy |
+| `MAX_CACHE_SIZE` | No | Max disk cache before cleanup (default: 10GB) |
+| `ADMIN_TOKEN` | No | Bearer token — enables `/admin/*` queue tuning when set |
+
+**Solana** (`IQ_CHAIN=solana`)
 
 | Variable | Required | Description |
 |----------|----------|-------------|
@@ -41,11 +96,25 @@ That's it. Your gateway is live at `http://localhost:3000`.
 | `HELIUS_API_KEY` | No | Helius API key for faster reads (paid plan enables gTFA + batch) |
 | `HELIUS_API_KEYS` | No | Comma-separated Helius keys for 429 fallback (overrides `HELIUS_API_KEY`) |
 | `BACKFILL_FROM_SLOT` | No | Start slot for historical backfill (requires paid Helius). Set to `398615411` for full IQ Labs history |
-| `PORT` | No | Server port (default: 3000) |
-| `BASE_PATH` | No | URL prefix if behind reverse proxy |
-| `MAX_CACHE_SIZE` | No | Max disk cache before cleanup (default: 10GB) |
+
+**EVM** (`IQ_CHAIN=evm`)
+
+| Variable | Required | Description |
+|----------|----------|-------------|
+| `IQETH_NETWORK` | Yes | `sepolia`, `monad`, or `monadTestnet` |
+| `IQETH_RPC_ENDPOINT` | Yes | EVM JSON-RPC URL (chain ID validated against the network at boot) |
+| `ALCHEMY_API_KEY` | No | Enables batched reads + higher rate limits |
+| `ENS_RPC_ENDPOINT` | No | Mainnet RPC for ENS resolution (default `https://eth.llamarpc.com`) |
+| `KNOWN_DBROOTS_FILE` | No | Seed file of dbRootIds for `/dbroots` discovery (default `./config/known-dbroots.json`) |
 
 ## Endpoints
+
+Paths below use Solana identifiers (`{sig}`, `{pda}`). On `IQ_CHAIN=evm` the
+shapes change: `{sig}` → `{txHash}` (`0x…`), and `{pda}` → `{dbRootId}/{tableName}`.
+Two routes are **Solana-only** ([Site Hosting](#site-hosting-solana-permanent-web),
+[SNS](#sns--solsite-integration)); one is **EVM-only** ([ENS](#ens-evm)). Everything
+else exists on both chains. The live `/openapi.json` and `/docs` always reflect the
+active chain.
 
 ### Assets & Metadata
 
@@ -88,14 +157,25 @@ That's it. Your gateway is live at `http://localhost:3000`.
 |----------|-------------|
 | `GET /gate/{tablePda}/check/{wallet}` | Server-side token-gate check. Returns `{sol, gate, tokenBalance, meetsGate, minSol}`. Replaces the client's `getBalance` + `getAccount` calls for gated-board UX. Cached 30 s. |
 
+### ENS (EVM)
+
+> **EVM only** (`IQ_CHAIN=evm`). Replaces the Solana [SNS](#sns--solsite-integration) routes. Uses a dedicated mainnet RPC (`ENS_RPC_ENDPOINT`), cached 30 min.
+
+| Endpoint | Description |
+|----------|-------------|
+| `GET /ens/{name}` | Forward resolve an ENS name → `{name, address}`. If the segment is an address, reverse-resolves → `{address, name}`. |
+| `GET /ens/{addr}/reverse` | Reverse resolve an address → primary ENS name `{address, name}`. |
+
 ### API Docs
 
 | Endpoint | Description |
 |----------|-------------|
-| `GET /openapi.json` | OpenAPI 3.0 schema for every endpoint |
+| `GET /openapi.json` | OpenAPI 3.0 schema for every endpoint (active chain) |
 | `GET /docs` | Interactive Swagger UI with gateway-hosted assets |
 
 ### Site Hosting (Solana Permanent Web)
+
+> **Solana only.** No EVM equivalent in v1 (no on-chain manifest convention established for the EVM SDK yet).
 
 | Endpoint | Description |
 |----------|-------------|
@@ -143,7 +223,11 @@ Three-tier cache with different TTLs:
 |-------|-----|---------|
 | Memory (LRU) | 60s head, 5min other | Fast reads |
 | Disk (SQLite) | 5min rows, 24h immutable | Persistent across restarts |
-| Chain (Solana) | Permanent | Source of truth |
+| Chain (Solana / EVM) | Permanent | Source of truth |
+
+The cache layer is chain-agnostic — the same SQLite store, LRU, and dedup serve
+both chains. Run a separate `CACHE_DIR` per (chain × network) instance so base58
+and `0x` keys never collide (k8s PVCs already split this way).
 
 Rows head pages use the table account's `lastTimestamp` as a cheap change
 gate. If the timestamp is unchanged, the gateway can keep serving the cached
@@ -218,8 +302,12 @@ services:
         to:
           - global: true
     env:
-      - SOLANA_CLUSTER=mainnet-beta
+      - IQ_CHAIN=solana                                       # or: evm
+      - SOLANA_CLUSTER=mainnet-beta                           # solana only
       - SOLANA_RPC_ENDPOINT=https://api.mainnet-beta.solana.com
+      # EVM instead:
+      # - IQETH_NETWORK=sepolia
+      # - IQETH_RPC_ENDPOINT=https://rpc.sepolia.org
       - PORT=3000
     params:
       storage:
@@ -311,9 +399,32 @@ process state.
 
 ## Architecture
 
-The gateway is a read-only cache layer. It never writes to Solana. All data is public and recoverable from chain. Multiple gateways can serve the same data independently.
+The gateway is a read-only cache layer. It never writes to chain. All data is public and recoverable from chain, so multiple gateways serve the same data independently.
+
+The only real divergence between chains lives in `src/chain/`. A `ChainReader`
+interface ([src/chain/types.ts](src/chain/types.ts)) is the seam; two adapters
+implement it:
+
+```
+src/chain/
+  types.ts     # ChainReader interface (the shared intersection)
+  solana/      # web3.js + Helius + SNS    → implements ChainReader
+  evm/         # ethers + Alchemy + ENS    → implements ChainReader
+  index.ts     # picks ONE adapter by IQ_CHAIN, re-exports its surface
+src/routes/
+  *.ts         # Solana route set
+  evm/         # EVM route set
+src/cache/     # shared store/LRU/dedup; catalog-ingest.evm.ts for EVM row shape
+src/server.ts  # branches on IQ_CHAIN — mounts one route set, validates one network
+```
+
+Importing the inactive adapter is side-effect-free (no top-level RPC or env
+throw); EVM defers its provider/network wiring into `initEvm()`, called from
+`initChain()` only when `IQ_CHAIN=evm`.
 
 ## SNS / sol.site integration
+
+> **Solana only.** On `IQ_CHAIN=evm` these routes are not mounted — EVM uses [ENS](#ens-evm) instead.
 
 The gateway resolves Solana Name Service (SNS) domains to on-chain IQ manifests at request time. One URL record on a `.sol` domain powers three browser surfaces — no server-side coordination required.
 

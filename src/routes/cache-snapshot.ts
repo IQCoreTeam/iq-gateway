@@ -17,7 +17,7 @@ import { existsSync, mkdirSync } from "node:fs";
 import { lstat, open, realpath, rename, stat } from "node:fs/promises";
 import { join, relative, resolve } from "node:path";
 import { metaCache, imageCache, userStateCache } from "../cache/memory";
-import { snsCache, snsInflight } from "../chain/sns";
+import { snsCache, snsInflight } from "../chain/solana/sns";
 import { rowsCache, indexCache, sliceCache, inflight as tableInflight } from "./table";
 import { checkAdminAuth } from "./admin";
 

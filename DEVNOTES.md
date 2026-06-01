@@ -1,5 +1,45 @@
 # iq-gateway devnotes
 
+## 2026-06-01 — Unified Solana + EVM behind one ChainReader (PR #10)
+
+Merged `iq-eth-gateway` into this repo. One codebase, two chains, selected at
+boot by `IQ_CHAIN` (`solana` default | `evm`). Implements PR #10's seam.
+
+### What moved
+- `src/chain/*.ts` (Solana) → `src/chain/solana/`.
+- `iq-eth-gateway/src/chain/*` → `src/chain/evm/` (npm `@iqlabs-official/ethereum-sdk@0.2.2`, not a `file:` link).
+- New `src/chain/types.ts` — `ChainReader` interface (the shared intersection only).
+- New `src/chain/index.ts` selector — picks shared names from the active adapter,
+  re-exports both adapters' chain-specific names (no collisions) so both route
+  sets type-check; `server.ts` mounts only the active set.
+- EVM routes → `src/routes/evm/`; EVM OpenAPI → `src/openapi.evm.ts`;
+  EVM catalog ingest (txHash row shape) → `src/cache/catalog-ingest.evm.ts`.
+- `src/utils.ts` gained `isTxHash` / `isEvmAddress` alongside `isValidPublicKey`.
+- `src/cache/{disk,store}.ts` CacheType union extended with `"ens"` (superset).
+
+### Key decision — import-safety
+Both adapter modules must be import-safe so loading the inactive one (the barrel
+imports both to build the selector) can't crash the active chain. The EVM reader
+used to **throw at module top-level** if `IQETH_NETWORK` was invalid. That throw
+(plus `iqlabs.setNetwork` + provider construction) moved into `initEvm()`, called
+from `initChain()` only when `IQ_CHAIN=evm`. `NETWORK`/`NETWORK_CONFIG` fall back
+to a default at import; strict validation happens in `initEvm()`. Solana side-
+effects are harmless (no env throw, no network call), so its `init` is a no-op.
+
+### Why routes stayed per-chain (not force-merged)
+PR #10's premise — "only `src/chain` differs" — is partially wrong in the code:
+routes diverge by id format (base58 vs `0x`), row field names (`__txSignature`
+vs `__txHash`), validation, and Solana-only site/SNS hosting. Forcing one route
+file per endpoint would mean rewriting working, live code. So the merge keeps the
+Solana route set byte-identical (zero regression on `gateway.iqlabs.dev`) and
+adds the EVM set as a parallel, conditionally-mounted directory.
+
+### Verified
+- `bun build --target bun` clean (973 modules, both chain stacks).
+- Solana boot: cluster validated, `/sns` mounted, `/ens` 404.
+- EVM boot: chainId validated, `/ens` mounted, `/sns` 404; 24/24 endpoint sweep → 200.
+- `bun test`: 45/45 (39 Solana + 6 EVM).
+
 ## 2025-03-25 — Helius batch decode fix, cache guard, cleanup
 
 ### Helius batch decode was silently broken

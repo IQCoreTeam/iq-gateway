@@ -12,7 +12,7 @@
 
 import type { Context } from "hono";
 import { Hono } from "hono";
-import { resolveDomainToSig, resolveDomainOwner, resolveDomainRecord } from "../chain/sns";
+import { resolveDomainToSig, resolveDomainOwner, resolveDomainRecord } from "../chain/solana/sns";
 import { isSafePath } from "../site-hosts";
 
 export const snsRouter = new Hono();

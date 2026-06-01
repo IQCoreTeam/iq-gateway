@@ -1,5 +1,5 @@
 import { Hono } from "hono";
-import { readAsset, generateETag } from "../chain";
+import { readAsset, generateETag } from "../chain/solana";
 import { metaCache, TTL, getDiskCache, setDiskCache } from "../cache";
 
 export const metaRouter = new Hono();
