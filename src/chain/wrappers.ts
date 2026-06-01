@@ -106,6 +106,11 @@ export function buildEvmWrapper(network: NetworkMode) {
 export type EvmWrapper = ReturnType<typeof buildEvmWrapper>;
 export type ChainWrapper = SolanaWrapper | EvmWrapper;
 
+/** Hono env for the EVM sub-app: the resolver injects the per-request wrapper
+ *  (the network chosen by id-shape / ?network) + its network name. Handlers read
+ *  `c.get("chain")` (EVM surface) and `c.get("network")` (cache key namespace). */
+export type EvmEnv = { Variables: { chain: EvmWrapper; network: string } };
+
 // ─── The map ─────────────────────────────────────────────────────────────────
 
 const EVM_NETWORKS = Object.keys(NETWORKS) as NetworkMode[];

@@ -1,10 +1,10 @@
 import { Hono } from "hono";
-import { readAsset, generateETag, decodeAssetData, detectImageType } from "../../chain/evm";
 import { imageCache, TTL, getDiskCache, setDiskCache } from "../../cache";
 import { escapeMarkup } from "./render";
 import { isTxHash } from "../../utils";
+import type { EvmEnv } from "../../chain/wrappers";
 
-export const viewRouter = new Hono();
+export const viewRouter = new Hono<EvmEnv>();
 
 function renderHtmlPage(text: string, txHash: string, baseUrl: string): string {
   const short = txHash.slice(0, 10) + "..." + txHash.slice(-8);
@@ -70,21 +70,23 @@ viewRouter.get("/:txHash", async (c) => {
     if (txHash.endsWith(ext)) { txHash = txHash.slice(0, -ext.length); break; }
   }
   if (!isTxHash(txHash)) return c.text("invalid tx hash", 400);
+  const chain = c.get("chain");
+  const network = c.get("network");
 
-  const cacheKey = `view:${txHash}`;
+  const cacheKey = `${network}:view:${txHash}`;
   let buf = imageCache.get(cacheKey);
   if (!buf) {
-    const disk = await getDiskCache("view", txHash);
+    const disk = await getDiskCache("view", txHash, network);
     if (disk) { buf = disk; imageCache.set(cacheKey, buf, TTL.IMAGE); }
   }
 
   if (!buf) {
     try {
-      const { data } = await readAsset(txHash);
+      const { data } = await chain.readAsset(txHash);
       if (!data) return c.text("not found", 404);
-      buf = decodeAssetData(data);
+      buf = chain.decodeAssetData(data);
       imageCache.set(cacheKey, buf, TTL.IMAGE);
-      await setDiskCache("view", txHash, buf);
+      await setDiskCache("view", txHash, buf, network);
     } catch (e: unknown) {
       const msg = e instanceof Error ? e.message : "unknown error";
       console.error("view fetch error:", msg);
@@ -92,7 +94,7 @@ viewRouter.get("/:txHash", async (c) => {
     }
   }
 
-  if (detectImageType(buf)) return c.redirect(`/img/${txHash}`, 302);
+  if (chain.detectImageType(buf)) return c.redirect(`/img/${txHash}`, 302);
 
   const text = buf.toString("utf-8");
   const proto = c.req.header("X-Forwarded-Proto") || "https";
@@ -101,7 +103,7 @@ viewRouter.get("/:txHash", async (c) => {
   const baseUrl = `${proto}://${host}${basePath}`;
   const html = renderHtmlPage(text, txHash, baseUrl);
 
-  const etag = generateETag(html);
+  const etag = chain.generateETag(html);
   if (c.req.header("If-None-Match") === etag) return c.body(null, 304);
 
   return c.html(html, 200, {

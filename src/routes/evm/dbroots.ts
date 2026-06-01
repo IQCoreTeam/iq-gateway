@@ -8,10 +8,11 @@
 import { Hono } from "hono";
 import { readFile } from "node:fs/promises";
 import { id as keccak } from "ethers";
-import { getTablelistFromRoot } from "../../chain/evm";
-import { MemoryCache } from "../../cache";
+import type { EvmEnv } from "../../chain/wrappers";
 
-export const dbrootsRouter = new Hono();
+export const dbrootsRouter = new Hono<EvmEnv>();
+
+type GetTablelistFn = (id: string) => Promise<any>;
 
 interface DbRootSeed {
   /** Human-readable dbRootId string (the SDK keccak's it). */
@@ -39,10 +40,11 @@ export interface DbRootsPayload {
   count: number;
 }
 
-const cache = new MemoryCache<string>(1);
 const TTL_MS = 30 * 60 * 1000;
-const CACHE_KEY = "dbroots:all";
-let inflight: Promise<DbRootsPayload> | null = null;
+// Per-network cache: the same seed id resolves to different tables on different
+// networks, so dbroots are keyed by network.
+const cacheByNet = new Map<string, { at: number; payload: DbRootsPayload }>();
+const inflightByNet = new Map<string, Promise<DbRootsPayload>>();
 
 const SEED_FILE = process.env.KNOWN_DBROOTS_FILE || "./config/known-dbroots.json";
 const dynamicSeeds = new Set<string>();
@@ -62,7 +64,7 @@ async function loadSeedFile(): Promise<DbRootSeed[]> {
   }
 }
 
-async function fetchAllDbRoots(): Promise<DbRootsPayload> {
+async function fetchAllDbRoots(getTablelist: GetTablelistFn): Promise<DbRootsPayload> {
   const seeds = await loadSeedFile();
   const ids = new Set<string>([
     ...seeds.map((s) => s.id),
@@ -72,7 +74,7 @@ async function fetchAllDbRoots(): Promise<DbRootsPayload> {
   const dbroots: DbRootEntry[] = [];
   for (const id of ids) {
     try {
-      const root = await getTablelistFromRoot(id);
+      const root = await getTablelist(id);
       dbroots.push({
         id,
         seedHex: keccak(id),
@@ -94,24 +96,28 @@ async function fetchAllDbRoots(): Promise<DbRootsPayload> {
   };
 }
 
-export async function getCachedDbRoots(): Promise<DbRootsPayload> {
-  const cached = cache.get(CACHE_KEY);
-  if (cached) return JSON.parse(cached) as DbRootsPayload;
+export async function getCachedDbRoots(network: string, getTablelist: GetTablelistFn): Promise<DbRootsPayload> {
+  const hit = cacheByNet.get(network);
+  if (hit && Date.now() - hit.at < TTL_MS) return hit.payload;
 
+  let inflight = inflightByNet.get(network);
   if (!inflight) {
     inflight = (async () => {
-      try { return await fetchAllDbRoots(); }
-      finally { inflight = null; }
+      try { return await fetchAllDbRoots(getTablelist); }
+      finally { inflightByNet.delete(network); }
     })();
+    inflightByNet.set(network, inflight);
   }
   const payload = await inflight;
-  cache.set(CACHE_KEY, JSON.stringify(payload), TTL_MS);
+  cacheByNet.set(network, { at: Date.now(), payload });
   return payload;
 }
 
 dbrootsRouter.get("/", async (c) => {
+  const chain = c.get("chain");
+  const network = c.get("network");
   try {
-    return c.json(await getCachedDbRoots());
+    return c.json(await getCachedDbRoots(network, chain.getTablelistFromRoot));
   } catch (e) {
     console.error("[dbroots] failed:", e instanceof Error ? e.message : e);
     return c.json({ error: "failed to read DbRoots" }, 500);

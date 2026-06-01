@@ -1,9 +1,9 @@
 import { Hono } from "hono";
-import { readAsset, generateETag } from "../../chain/evm";
 import { metaCache, TTL, getDiskCache, setDiskCache } from "../../cache";
 import { isTxHash } from "../../utils";
+import type { EvmEnv } from "../../chain/wrappers";
 
-export const metaRouter = new Hono();
+export const metaRouter = new Hono<EvmEnv>();
 
 interface RawMeta {
   filename?: string;
@@ -17,15 +17,17 @@ metaRouter.get("/:txHash", async (c) => {
   let txHash = c.req.param("txHash");
   if (txHash.endsWith(".json")) txHash = txHash.slice(0, -5);
   if (!isTxHash(txHash)) return c.json({ error: "invalid tx hash" }, 400);
+  const chain = c.get("chain");
+  const network = c.get("network");
 
-  const cacheKey = `meta:${txHash}`;
+  const cacheKey = `${network}:meta:${txHash}`;
   let raw: RawMeta | null = null;
 
   const cached = metaCache.get(cacheKey);
   if (cached) raw = JSON.parse(cached);
 
   if (!raw) {
-    const disk = await getDiskCache("meta", txHash);
+    const disk = await getDiskCache("meta", txHash, network);
     if (disk) {
       raw = JSON.parse(disk.toString("utf8"));
       metaCache.set(cacheKey, disk.toString("utf8"), TTL.META_IMMUTABLE);
@@ -34,12 +36,12 @@ metaRouter.get("/:txHash", async (c) => {
 
   if (!raw) {
     try {
-      const { metadata } = await readAsset(txHash);
+      const { metadata } = await chain.readAsset(txHash);
       if (!metadata) return c.json({ error: "not found" }, 404);
       raw = typeof metadata === "string" ? JSON.parse(metadata) : (metadata as RawMeta);
       const rawStr = JSON.stringify(raw);
       metaCache.set(cacheKey, rawStr, TTL.META_IMMUTABLE);
-      await setDiskCache("meta", txHash, rawStr);
+      await setDiskCache("meta", txHash, rawStr, network);
     } catch (e: unknown) {
       const msg = e instanceof Error ? e.message : "fetch failed";
       if (msg.includes("not found") || msg.includes("Unexpected function")) {
@@ -76,7 +78,7 @@ metaRouter.get("/:txHash", async (c) => {
   };
 
   const jsonStr = JSON.stringify(metaplex);
-  const etag = generateETag(jsonStr);
+  const etag = chain.generateETag(jsonStr);
   if (c.req.header("If-None-Match") === etag) return c.body(null, 304);
 
   return c.json(metaplex, 200, {
