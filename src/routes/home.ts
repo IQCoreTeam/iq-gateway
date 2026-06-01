@@ -197,7 +197,7 @@ bun install
 cp .env.example .env
 # set SOLANA_CLUSTER=mainnet-beta + SOLANA_RPC_ENDPOINT
 bun run dev</div>
-<p>SDLs for Akash + manifests for k3s/k8s in the repo. To bootstrap a cold cache from a peer:</p>
+<p>Containerized via the repo <code>Dockerfile</code> (chain-agnostic image; set <code>IQ_CHAIN</code> at runtime). To bootstrap a cold cache from a peer:</p>
 <div class="pre-code">curl -H "X-Cache-Snapshot-Token: \$TOK" \\
      https://&lt;peer-gateway&gt;/cache/snapshot | tar -xz -C ./cache</div>
 <p>Pulls the peer's full <code>cache.db</code> + blob dirs. Each entry is keyed by an on-chain identifier so you can verify any subset against chain. Skips the cold-start RPC storm.</p>

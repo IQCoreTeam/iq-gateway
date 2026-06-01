@@ -186,4 +186,4 @@ Traefik issues per-host Let's Encrypt certificates via TLS-ALPN-01 on first hit.
 - `sns` — path-based `/sns/<domain>` resolver. Live in production.
 - `sns-host-based` — `*.sol.site` host middleware on top of `sns`. Currently deployed.
 
-`sns-host-based` is a strict superset of `sns`. Adds the `*.sol.site` host middleware in `src/server.ts` and the Traefik wildcard IngressRoute in `k8s/mainnet/sol-site-wildcard-ingressroute.yaml`. Deploy this branch for full functionality; deploy `sns` only if you want path-based access without host routing.
+`sns-host-based` is a strict superset of `sns`. Adds the `*.sol.site` host middleware in `src/server.ts`. Full functionality also needs a wildcard route for `*.sol.site` at your ingress/proxy layer (operator-specific). Deploy this branch for full functionality; deploy `sns` only if you want path-based access without host routing.

@@ -74,23 +74,18 @@ Previously, a failed decode (0 rows) would cache an empty response to disk perma
 
 ## Deployment
 
-### Akash (gateway)
+The gateway is a plain container; the deploy target is the operator's choice.
+The only build gotcha worth recording:
 
 ```bash
-# build + push with the buildx flags Akash provider runtimes need
-# (--provenance=false --sbom=false --output=...,oci-mediatypes=false)
+# push a classic Docker manifest v2 image (some runtimes reject OCI-only).
+# build-and-push.sh pins the buildx flags for this:
+#   --provenance=false --sbom=false --output=...,oci-mediatypes=false
 ./scripts/build-and-push.sh v16 0.2.2 latest
-
-# bump akash/deploy.yaml image tag to match, then either paste into
-# console.akash.network → Update Deployment, or:
-akash tx deployment update akash/deploy.yaml --dseq <DSEQ> --from <KEY>
 ```
 
-The persistent `/app/cache` disk survives `tx deployment update` as long
-as the storage block in the SDL stays byte-identical across versions.
-
-### DNS
-`gateway.iqlabs.dev` → Akash ingress
+Mount `/app/cache` (`CACHE_DIR`) on a persistent volume so it survives image
+swaps — see "Redeploy preserves cache" below.
 
 ## 2026-05-10 — Cache snapshot (v0.2.x)
 
@@ -107,9 +102,9 @@ db.run(`VACUUM INTO '${stageDb}'`);  // bun:sqlite can't bind path as a paramete
 
 Falls back to `cp` of the live db if VACUUM fails.
 
-### Akash redeploy preserves cache
+### Redeploy preserves cache
 
-The persistent-storage section in `akash/deploy.yaml` stays byte-identical across `tx deployment update` runs. Akash only re-creates the container when the image changes; the `/app/cache` PV survives. Same logic for k8s — the `gateway-cache` PVC has `persistentVolumeReclaimPolicy: Retain`, so even an accidental PVC delete leaves the underlying PV with data intact.
+The gateway treats `CACHE_DIR` (`/app/cache`) as durable: a redeploy that only swaps the image should keep the same volume, so the cache survives. Whatever orchestrator runs the container, mount cache on storage whose lifecycle is independent of the container (retain-on-delete) so an accidental container/pod removal doesn't wipe the data.
 
 ### 0.2.1 (2026-05-10) — streaming snapshot + path fallback
 
@@ -117,6 +112,6 @@ The persistent-storage section in `akash/deploy.yaml` stays byte-identical acros
 
 `getDiskCache` falls back to a canonical `pathFor(type, key)` reconstruction when the stored path doesn't resolve — peer-bootstrapped caches (where the writer's `CACHE_DIR` may differ from ours) still serve hits without manual fixup.
 
-`scripts/bootstrap-cache-from-peer.sh --k8s <peer> [ns] [dep]` is the safe restore flow as one command: scale the deployment to 0 → wipe the PVC via a temp pod → untar the peer snapshot → verify the row count → scale back up.
+`scripts/bootstrap-cache-from-peer.sh <peer> [cache-dir]` streams a peer's snapshot into a cache directory. Stopping/starting the gateway around it (and any volume wiring) is left to the operator's platform — the script stays deployment-agnostic.
 
 `scripts/build-and-push.sh <tag>...` pins the buildx flags so we never accidentally push an OCI-only image again (Akash's runtime requires the classic Docker manifest v2 format).

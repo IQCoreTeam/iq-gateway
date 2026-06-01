@@ -227,7 +227,7 @@ Three-tier cache with different TTLs:
 
 The cache layer is chain-agnostic — the same SQLite store, LRU, and dedup serve
 both chains. Run a separate `CACHE_DIR` per (chain × network) instance so base58
-and `0x` keys never collide (k8s PVCs already split this way).
+and `0x` keys never collide — give each instance its own persistent volume.
 
 Rows head pages use the table account's `lastTimestamp` as a cheap change
 gate. If the timestamp is unchanged, the gateway can keep serving the cached
@@ -248,110 +248,23 @@ Without Helius, everything still works using standard Solana RPC — just slower
 
 ## Deployment
 
-### VPS / Bare Metal
+The gateway ships as a chain-agnostic container (see the repo `Dockerfile`). How you run it — bare VPS, docker compose, Kubernetes, Akash, anything — is up to your infra. The gateway only asks for the following contract:
 
-1. Build and run with Docker:
+| Requirement | Detail |
+|---|---|
+| Port | Listens on `PORT` (default `3000`). |
+| Env | `IQ_CHAIN` + the matching network/RPC vars (see [Configuration](#configuration)). Inject however your platform does env (`--env-file`, secrets, etc.). |
+| Persistent volume | Mount durable storage at `CACHE_DIR` (default `/app/cache`). Use one volume per (chain × network) instance so caches don't collide. Survives restarts; safe to wipe. |
+| TLS / routing | Terminate TLS and route your domain to the container at your proxy/ingress layer. The gateway speaks plain HTTP. |
+
+Minimal local run:
+
 ```bash
 docker build -t iq-gateway .
-docker run -d \
-  -p 3000:3000 \
-  -v iq-cache:/app/cache \
-  --env-file .env \
-  --restart unless-stopped \
-  iq-gateway
+docker run -d -p 3000:3000 -v iq-cache:/app/cache --env-file .env --restart unless-stopped iq-gateway
 ```
 
-2. Put it behind a reverse proxy (nginx, caddy, etc.) for SSL:
-```nginx
-server {
-    listen 443 ssl;
-    server_name gateway.yourdomain.com;
-
-    ssl_certificate     /etc/letsencrypt/live/gateway.yourdomain.com/fullchain.pem;
-    ssl_certificate_key /etc/letsencrypt/live/gateway.yourdomain.com/privkey.pem;
-
-    location / {
-        proxy_pass http://127.0.0.1:3000;
-        proxy_set_header Host $host;
-        proxy_set_header X-Forwarded-For $remote_addr;
-    }
-}
-```
-
-3. Point DNS:
-```
-Type:  A
-Name:  gateway
-Value: <your-server-ip>
-```
-
-### Akash (Decentralized)
-
-1. Create an SDL file (`deploy.yaml`):
-```yaml
----
-version: "2.0"
-services:
-  gateway:
-    image: ghcr.io/iqcoreteam/iq-gateway:latest
-    expose:
-      - port: 3000
-        as: 80
-        accept:
-          - gateway.yourdomain.com
-        to:
-          - global: true
-    env:
-      - IQ_CHAIN=solana                                       # or: evm
-      - SOLANA_CLUSTER=mainnet-beta                           # solana only
-      - SOLANA_RPC_ENDPOINT=https://api.mainnet-beta.solana.com
-      # EVM instead:
-      # - IQETH_NETWORK=sepolia
-      # - IQETH_RPC_ENDPOINT=https://rpc.sepolia.org
-      - PORT=3000
-    params:
-      storage:
-        cache:
-          mount: /app/cache
-          readOnly: false
-profiles:
-  compute:
-    gateway:
-      resources:
-        cpu:
-          units: 2
-        memory:
-          size: 2Gi
-        storage:
-          - size: 1Gi
-          - name: cache
-            size: 10Gi
-            attributes:
-              persistent: true
-              class: beta3
-  placement:
-    dcloud:
-      pricing:
-        gateway:
-          denom: uakt
-          amount: 100000
-deployment:
-  gateway:
-    dcloud:
-      profile: gateway
-      count: 1
-```
-
-2. Deploy via [Akash Console](https://console.akash.network) or CLI
-
-3. Point DNS to the ingress URI Akash gives you:
-```
-Type:   CNAME
-Name:   gateway
-Value:  <your-deployment>.ingress.akashprovid.com
-```
-
-The `accept` field in the SDL tells the Akash provider to route traffic for your domain to the container.
+That's the whole contract — port, env, a persistent `CACHE_DIR`, and a proxy in front. Everything else is your platform's concern, not the gateway's.
 
 ## Cache Snapshot
 
@@ -363,14 +276,6 @@ Public read-only snapshot of the gateway's disk cache so a cold peer can bootstr
 # warm a cold gateway from a peer's hot cache
 ./scripts/bootstrap-cache-from-peer.sh https://gateway.iqlabs.dev ./cache
 # then start (or restart) your gateway
-```
-
-### Kubernetes bootstrap
-
-For a deployment whose `/app/cache` is mounted from a PVC, the script handles the full safe restore — scale the deployment to 0, wipe the PVC via a temp pod, untar the peer snapshot, verify the row count, scale back up:
-
-```bash
-./scripts/bootstrap-cache-from-peer.sh --k8s https://gateway.iqlabs.dev iqlabs gateway
 ```
 
 ### Or inline
