@@ -23,6 +23,7 @@ export interface CatalogEntry {
   label: string;     // short display name shown on the result card
   snippet: string;   // longer one-line preview
   body: string;      // full text we want searchable
+  network?: string;  // chain/network the entry came from; defaults to 'solana'
 }
 
 export interface SearchHit extends CatalogEntry {
@@ -31,12 +32,34 @@ export interface SearchHit extends CatalogEntry {
 
 let prepared = false;
 
+const DEFAULT_NETWORK = "solana";
+
+function hasNetworkColumn(db: Database): boolean {
+  try {
+    const cols = db.query<{ name: string }, []>("PRAGMA table_info(catalog_fts)").all();
+    return cols.some((c) => c.name === "network");
+  } catch {
+    return false;
+  }
+}
+
 function prepare(db: Database) {
   if (prepared) return;
+  // FTS5 can't ALTER to add a column. catalog_fts is a DERIVED search index
+  // (on-chain is the source of truth), so when an old single-chain index is
+  // found without `network`, drop + recreate and let the backfill job repopulate.
+  // Lossless: nothing here is canonical data.
+  const exists = db
+    .query<{ n: number }, []>("SELECT count(*) AS n FROM sqlite_master WHERE name='catalog_fts'")
+    .get();
+  if (exists && exists.n > 0 && !hasNetworkColumn(db)) {
+    db.run("DROP TABLE catalog_fts");
+  }
   db.run(`
     CREATE VIRTUAL TABLE IF NOT EXISTS catalog_fts USING fts5(
       kind UNINDEXED,
       id UNINDEXED,
+      network UNINDEXED,
       dbroot,
       label,
       snippet,
@@ -54,8 +77,8 @@ export async function upsertCatalogEntry(entry: CatalogEntry): Promise<void> {
   prepare(db);
   db.run("DELETE FROM catalog_fts WHERE kind = ? AND id = ?", [entry.kind, entry.id]);
   db.run(
-    "INSERT INTO catalog_fts(kind, id, dbroot, label, snippet, body) VALUES (?, ?, ?, ?, ?, ?)",
-    [entry.kind, entry.id, entry.dbroot, entry.label, entry.snippet, entry.body],
+    "INSERT INTO catalog_fts(kind, id, network, dbroot, label, snippet, body) VALUES (?, ?, ?, ?, ?, ?, ?)",
+    [entry.kind, entry.id, entry.network ?? DEFAULT_NETWORK, entry.dbroot, entry.label, entry.snippet, entry.body],
   );
 }
 
@@ -67,12 +90,12 @@ export async function upsertCatalogEntries(entries: CatalogEntry[]): Promise<voi
   prepare(db);
   const del = db.prepare("DELETE FROM catalog_fts WHERE kind = ? AND id = ?");
   const ins = db.prepare(
-    "INSERT INTO catalog_fts(kind, id, dbroot, label, snippet, body) VALUES (?, ?, ?, ?, ?, ?)",
+    "INSERT INTO catalog_fts(kind, id, network, dbroot, label, snippet, body) VALUES (?, ?, ?, ?, ?, ?, ?)",
   );
   db.transaction((rows: CatalogEntry[]) => {
     for (const r of rows) {
       del.run(r.kind, r.id);
-      ins.run(r.kind, r.id, r.dbroot, r.label, r.snippet, r.body);
+      ins.run(r.kind, r.id, r.network ?? DEFAULT_NETWORK, r.dbroot, r.label, r.snippet, r.body);
     }
   })(entries);
 }
@@ -90,7 +113,7 @@ export async function removeCatalogEntry(kind: CatalogEntry["kind"], id: string)
  *  enough that a scan is cheap and the alternative is 0 hits. */
 export async function searchCatalog(
   q: string,
-  opts: { kind?: CatalogEntry["kind"]; limit?: number } = {},
+  opts: { kind?: CatalogEntry["kind"]; limit?: number; network?: string } = {},
 ): Promise<SearchHit[]> {
   const term = q.trim();
   if (!term) return [];
@@ -114,12 +137,14 @@ export async function searchCatalog(
     for (const p of patterns) args.push(p, p, p);
     const kindClause = opts.kind ? " AND kind = ?" : "";
     if (opts.kind) args.push(opts.kind);
+    const netClause = opts.network ? " AND network = ?" : "";
+    if (opts.network) args.push(opts.network);
     args.push(limit);
 
     try {
       const stmt = db.prepare(
-        `SELECT kind, id, dbroot, label, snippet, body, 0 AS rank
-           FROM catalog_fts WHERE ${where}${kindClause}
+        `SELECT kind, id, network, dbroot, label, snippet, body, 0 AS rank
+           FROM catalog_fts WHERE ${where}${kindClause}${netClause}
            ORDER BY label LIMIT ?`,
       );
       return stmt.all(...args) as SearchHit[];
@@ -134,27 +159,30 @@ export async function searchCatalog(
   // text like "iq gameboy" and get prefix-matched hits.
   const safe = tokens.map((t) => `"${t.replace(/"/g, '""')}"*`).join(" ");
 
-  const sql = opts.kind
-    ? `SELECT kind, id, dbroot, label, snippet, body, rank
-         FROM catalog_fts WHERE catalog_fts MATCH ? AND kind = ?
-         ORDER BY rank LIMIT ?`
-    : `SELECT kind, id, dbroot, label, snippet, body, rank
-         FROM catalog_fts WHERE catalog_fts MATCH ?
+  const kindClause = opts.kind ? " AND kind = ?" : "";
+  const netClause = opts.network ? " AND network = ?" : "";
+  const sql = `SELECT kind, id, network, dbroot, label, snippet, body, rank
+         FROM catalog_fts WHERE catalog_fts MATCH ?${kindClause}${netClause}
          ORDER BY rank LIMIT ?`;
+  const args: (string | number)[] = [safe];
+  if (opts.kind) args.push(opts.kind);
+  if (opts.network) args.push(opts.network);
+  args.push(limit);
 
   try {
     const stmt = db.prepare(sql);
-    const rows = opts.kind
-      ? (stmt.all(safe, opts.kind, limit) as SearchHit[])
-      : (stmt.all(safe, limit) as SearchHit[]);
-    return rows;
+    return stmt.all(...args) as SearchHit[];
   } catch (e) {
     console.warn("[catalog] FTS search error:", e instanceof Error ? e.message : e);
     return [];
   }
 }
 
-export async function catalogStats(): Promise<{ total: number; byKind: Record<string, number> }> {
+export async function catalogStats(): Promise<{
+  total: number;
+  byKind: Record<string, number>;
+  byNetwork: Record<string, number>;
+}> {
   const db = await getDb();
   prepare(db);
   const total = (db.query<{ n: number }, []>("SELECT count(*) AS n FROM catalog_fts").get())?.n ?? 0;
@@ -163,5 +191,10 @@ export async function catalogStats(): Promise<{ total: number; byKind: Record<st
   ).all();
   const byKind: Record<string, number> = {};
   for (const r of rows) byKind[r.kind] = r.n;
-  return { total, byKind };
+  const netRows = db.query<{ network: string; n: number }, []>(
+    "SELECT network, count(*) AS n FROM catalog_fts GROUP BY network",
+  ).all();
+  const byNetwork: Record<string, number> = {};
+  for (const r of netRows) byNetwork[r.network] = r.n;
+  return { total, byKind, byNetwork };
 }
