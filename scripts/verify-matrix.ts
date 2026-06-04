@@ -66,6 +66,13 @@ await check("GET /user/{addr}/state", `/user/${EVM_ADDR}/state`, ok);
 await check("GET /gate/{root}/posts/check/{wallet}", `/gate/${EVM_ROOT}/posts/check/${EVM_ADDR}`, (s, b) => ok(s) && b.includes("meetsGate"));
 await check("GET /dbroots?network=sepolia", "/dbroots?network=sepolia", (s, b) => ok(s) && b.includes("dbroots"));
 
+console.log("\n[search — global vs network-scoped]");
+// Search never 4xxs on shape; with ?network it scopes + echoes the network,
+// without it spans all networks (global catalog).
+await check("GET /search?q=iq (global)", "/search?q=iq", (s, b) => s === 200 && b.includes("hits"));
+await check("GET /search?q=iq&network=sepolia (scoped echoes network)", "/search?q=iq&network=sepolia", (s, b) => s === 200 && b.includes('"network":"sepolia"'));
+await check("GET /search?q=iq&network=bogus (no 4xx, just no scope match)", "/search?q=iq&network=bogus", (s) => s === 200);
+
 console.log("\n[EVM — monad / monadTestnet via ?network]");
 await check("GET /table rows ?network=monad", `/table/${EVM_ROOT}/posts/rows?network=monad`, is(200, 404, 500));
 await check("GET /data ?network=monadTestnet", `/data/${EVM_TX}?network=monadTestnet`, is(200, 404));

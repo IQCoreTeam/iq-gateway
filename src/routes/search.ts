@@ -15,6 +15,11 @@ searchRouter.get("/", async (c) => {
   const q = c.req.query("q") ?? "";
   const kindParam = c.req.query("kind");
   const limit = Number(c.req.query("limit"));
+  // Optional network filter. Without it, search spans every network (global
+  // catalog); with `?network=monad` it scopes to that network — matching how
+  // the data routes resolve. An unknown value just yields no hits (search never
+  // 4xxs on shape), so no validation here.
+  const network = c.req.query("network") || undefined;
 
   const kind: CatalogEntry["kind"] | undefined =
     kindParam === "dbroot" || kindParam === "table" || kindParam === "row"
@@ -23,9 +28,10 @@ searchRouter.get("/", async (c) => {
 
   const hits = await searchCatalog(q, {
     kind,
+    network,
     limit: Number.isFinite(limit) ? limit : undefined,
   });
-  return c.json({ q, hits, count: hits.length });
+  return c.json({ q, ...(network && { network }), hits, count: hits.length });
 });
 
 searchRouter.get("/stats", async (c) => {

@@ -62,3 +62,30 @@ describe("catalog — per-network search filter", () => {
     expect(all.map((h) => h.id).sort()).toEqual(["0xM", "0xS"]);
   });
 });
+
+describe("/search route — passes ?network through to the catalog", () => {
+  test("?network scopes results; omitted spans all networks", async () => {
+    const { searchRouter } = await import("../src/routes/search");
+    await upsertCatalogEntry({ kind: "row", id: "0xRS", network: "sepolia", dbroot: "", label: "rs", snippet: "beta", body: "beta sepolia route" });
+    await upsertCatalogEntry({ kind: "row", id: "0xRM", network: "monad", dbroot: "", label: "rm", snippet: "beta", body: "beta monad route" });
+
+    const json = async (path: string) =>
+      (await searchRouter.request(path)).json() as Promise<{ network?: string; hits: { id: string }[]; count: number }>;
+
+    const sep = await json("/?q=route&network=sepolia");
+    expect(sep.network).toBe("sepolia");
+    expect(sep.hits.map((h) => h.id)).toEqual(["0xRS"]);
+
+    const mon = await json("/?q=route&network=monad");
+    expect(mon.hits.map((h) => h.id)).toEqual(["0xRM"]);
+
+    const all = await json("/?q=route");
+    expect(all.network).toBeUndefined();          // no network echoed when unfiltered
+    expect(all.hits.map((h) => h.id).sort()).toEqual(["0xRM", "0xRS"]);
+
+    // Unknown network must not 4xx (search never rejects on shape) — just no hits.
+    const res = await searchRouter.request("/?q=route&network=nope");
+    expect(res.status).toBe(200);
+    expect((await res.json() as { count: number }).count).toBe(0);
+  });
+});
