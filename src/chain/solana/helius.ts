@@ -7,7 +7,7 @@
 // 10k-sig scan doesn't sit on one slot for 30s while live requests starve.
 
 import type { VersionedTransactionResponse } from "@solana/web3.js";
-import { enqueueRpc, type Priority } from "./rpc-queue";
+import { enqueueRpc, type Priority } from "../rpc-queue";
 
 const cluster = process.env.SOLANA_CLUSTER || "devnet";
 

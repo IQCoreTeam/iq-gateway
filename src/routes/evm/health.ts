@@ -1,15 +1,13 @@
 import { Hono } from "hono";
-import pkg from "../../package.json" with { type: "json" };
-import { metaCache, imageCache, userStateCache } from "../cache/memory";
-import { snsCache, snsInflight } from "../chain/solana/sns";
-import { getStats } from "../cache/store";
-import { getRpcMetrics } from "../chain/solana";
+import pkg from "../../../package.json" with { type: "json" };
+import { metaCache, imageCache, userStateCache } from "../../cache/memory";
+import { ensCache, ensInflight } from "../../chain/evm/ens";
+import { getStats } from "../../cache/store";
+import { getRpcMetrics, NETWORK } from "../../chain/evm";
 import { rowsCache, indexCache, sliceCache, inflight } from "./table";
 
 export const healthRouter = new Hono();
 
-// Version comes from package.json so we never have to remember to bump
-// two files. process.env.VERSION still wins (lets ops override at runtime).
 const VERSION = process.env.VERSION || pkg.version;
 const START_TIME = Date.now();
 
@@ -26,6 +24,7 @@ healthRouter.get("/health", async (c) => {
 
   return c.json({
     status: "ok",
+    network: NETWORK,
     uptime: Math.floor((Date.now() - START_TIME) / 1000),
     rpc: getRpcMetrics(),
     cache: {
@@ -37,8 +36,8 @@ healthRouter.get("/health", async (c) => {
         tableIndex: indexCache.size(),
         tableSlice: sliceCache.size(),
         inflightReads: inflight.size,
-        sns: snsCache.size(),
-        snsInflight: snsInflight.size,
+        ens: ensCache.size(),
+        ensInflight: ensInflight.size,
       },
       disk: {
         entries: diskStats.entryCount,

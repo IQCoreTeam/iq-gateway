@@ -1,5 +1,5 @@
 import { Hono } from "hono";
-import { readAsset, decodeAssetData, generateETag } from "../chain";
+import { readAsset, decodeAssetData, generateETag } from "../chain/solana";
 import { MemoryCache, TTL, getDiskCache, setDiskCache } from "../cache";
 
 export const siteRouter = new Hono();

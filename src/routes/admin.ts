@@ -5,7 +5,7 @@
 // allow everything). Bearer auth via Authorization header.
 
 import { Hono } from "hono";
-import { getQueueStats, setQueueConfig } from "../chain";
+import { getQueueStats, setQueueConfig } from "../chain/rpc-queue";
 
 const ADMIN_TOKEN = process.env.ADMIN_TOKEN;
 

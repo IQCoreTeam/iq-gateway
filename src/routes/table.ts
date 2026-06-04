@@ -4,7 +4,7 @@ import { Connection, PublicKey } from "@solana/web3.js";
 import { BorshAccountsCoder } from "@coral-xyz/anchor";
 import { createHash } from "node:crypto";
 import iqlabs from "@iqlabs-official/solana-sdk";
-import { fetchSignatureIndex, readRowsBySignatures, fetchRecentSignatures, readMultipleRows, readSingleRow, getTableMetaCached } from "../chain";
+import { fetchSignatureIndex, readRowsBySignatures, fetchRecentSignatures, readMultipleRows, readSingleRow, getTableMetaCached } from "../chain/solana";
 import { MemoryCache, TTL, getDiskCache, setDiskCache, deduped } from "../cache";
 import { ingestRow } from "../cache/catalog-ingest";
 import { invalidateUserAssets } from "./user";

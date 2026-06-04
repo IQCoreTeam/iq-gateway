@@ -30,7 +30,7 @@ const DISK_TTL: Partial<Record<string, number>> = {
 };
 
 export async function getDiskCache(
-  type: "meta" | "img" | "rows" | "user" | "render" | "view" | "site" | "site-file" | "signer-index" | "sns",
+  type: "meta" | "img" | "rows" | "user" | "render" | "view" | "site" | "site-file" | "signer-index" | "sns" | "ens",
   key: string
 ): Promise<Buffer | null> {
   const entry = await getEntry(`${type}:${key}`, DISK_TTL[type]);
@@ -47,7 +47,7 @@ export async function getDiskCache(
 }
 
 export async function setDiskCache(
-  type: "meta" | "img" | "rows" | "user" | "render" | "view" | "site" | "site-file" | "signer-index" | "sns",
+  type: "meta" | "img" | "rows" | "user" | "render" | "view" | "site" | "site-file" | "signer-index" | "sns" | "ens",
   key: string,
   data: Buffer | string
 ): Promise<void> {

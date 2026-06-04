@@ -1,5 +1,11 @@
 # How the SNS integration works
 
+> **Scope:** this doc covers the Solana name-service integration, active only when
+> `IQ_CHAIN=solana`. On `IQ_CHAIN=evm` the gateway uses **ENS** instead — forward
+> resolve at `GET /ens/{name}`, reverse at `GET /ens/{addr}/reverse` (dedicated
+> mainnet RPC via `ENS_RPC_ENDPOINT`, cached 30 min). There is no `*.sol.site`
+> host-routing or `/site/*` manifest hosting on EVM in v1.
+
 The IQ Gateway resolves Solana Name Service (SNS) domains to on-chain IQ manifests at request time. One URL record on a `.sol` domain powers three browser surfaces:
 
 - `<your-name>.sol` (in Brave with native SNS resolution enabled)
@@ -180,4 +186,4 @@ Traefik issues per-host Let's Encrypt certificates via TLS-ALPN-01 on first hit.
 - `sns` — path-based `/sns/<domain>` resolver. Live in production.
 - `sns-host-based` — `*.sol.site` host middleware on top of `sns`. Currently deployed.
 
-`sns-host-based` is a strict superset of `sns`. Adds the `*.sol.site` host middleware in `src/server.ts` and the Traefik wildcard IngressRoute in `k8s/mainnet/sol-site-wildcard-ingressroute.yaml`. Deploy this branch for full functionality; deploy `sns` only if you want path-based access without host routing.
+`sns-host-based` is a strict superset of `sns`. Adds the `*.sol.site` host middleware in `src/server.ts`. Full functionality also needs a wildcard route for `*.sol.site` at your ingress/proxy layer (operator-specific). Deploy this branch for full functionality; deploy `sns` only if you want path-based access without host routing.

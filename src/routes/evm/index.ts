@@ -1,0 +1,12 @@
+export { metaRouter } from "./meta";
+export { imgRouter } from "./img";
+export { viewRouter } from "./view";
+export { renderRouter } from "./render";
+export { healthRouter } from "./health";
+export { userRouter } from "./user";
+export { tableRouter } from "./table";
+export { dataRouter } from "./data";
+export { gateRouter } from "./gate";
+export { ensRouter } from "./ens";
+export { cacheRouter } from "./cache-snapshot";
+export { dbrootsRouter } from "./dbroots";

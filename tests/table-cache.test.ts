@@ -26,7 +26,7 @@ const meta = (lastTimestamp: number): Meta => ({
   gate: null,
 });
 
-mock.module("../src/chain", () => ({
+mock.module("../src/chain/solana", () => ({
   readAsset: async () => null,
   listUserAssets: async () => [],
   listUserSessions: async () => [],

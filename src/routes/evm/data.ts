@@ -1,25 +1,22 @@
 import { Hono } from "hono";
-import { readAsset } from "../chain/solana";
-import { MemoryCache, TTL, getDiskCache, setDiskCache, deduped } from "../cache";
+import { readAsset } from "../../chain/evm";
+import { MemoryCache, TTL, getDiskCache, setDiskCache, deduped } from "../../cache";
+import { isTxHash } from "../../utils";
 
 export const dataRouter = new Hono();
 
 const dataCache = new MemoryCache<string>(1000);
 const inflight = new Map<string, Promise<string>>();
 
-dataRouter.get("/:sig", async (c) => {
-  const sig = c.req.param("sig");
-  if (!sig || sig.length < 80) return c.json({ error: "invalid signature" }, 400);
+dataRouter.get("/:txHash", async (c) => {
+  const txHash = c.req.param("txHash");
+  if (!isTxHash(txHash)) return c.json({ error: "invalid tx hash" }, 400);
 
-  const cacheKey = `data:${sig}`;
+  const cacheKey = `data:${txHash}`;
 
-  // L1: Memory cache
   const cached = dataCache.get(cacheKey);
-  if (cached) {
-    return c.json(JSON.parse(cached));
-  }
+  if (cached) return c.json(JSON.parse(cached));
 
-  // L2: Disk cache (keyed with "data:" prefix to avoid collision with /meta cache)
   const disk = await getDiskCache("meta", cacheKey);
   if (disk) {
     const text = new TextDecoder().decode(disk);
@@ -27,11 +24,10 @@ dataRouter.get("/:sig", async (c) => {
     return c.json(JSON.parse(text));
   }
 
-  // L3: Fetch from chain (deduplicated)
   try {
     const result = await deduped(inflight, cacheKey, async () => {
-      const { data, metadata, signer, blockTime, slot } = await readAsset(sig);
-      return JSON.stringify({ data, metadata, signature: sig, signer, blockTime, slot });
+      const { data, metadata, signer, blockTime, blockNumber } = await readAsset(txHash);
+      return JSON.stringify({ data, metadata, txHash, signer, blockTime, blockNumber });
     });
 
     dataCache.set(cacheKey, result, TTL.META_IMMUTABLE);
@@ -40,8 +36,8 @@ dataRouter.get("/:sig", async (c) => {
     return c.json(JSON.parse(result));
   } catch (e: unknown) {
     const msg = e instanceof Error ? e.message : "unknown error";
-    if (msg.includes("not found") || msg.includes("instruction not found")) {
-      return c.json({ data: null, metadata: "", signature: sig }, 404);
+    if (msg.includes("not found") || msg.includes("Unexpected function")) {
+      return c.json({ data: null, metadata: "", txHash }, 404);
     }
     console.error("[/data] fetch error:", msg);
     return c.json({ error: "failed to fetch transaction data" }, 500);

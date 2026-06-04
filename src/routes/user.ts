@@ -1,5 +1,5 @@
 import { Hono } from "hono";
-import { listUserAssets, listUserSessions, readUserState, fetchUserConnections, getSignerSigs } from "../chain";
+import { listUserAssets, listUserSessions, readUserState, fetchUserConnections, getSignerSigs } from "../chain/solana";
 import { MemoryCache, userStateCache, TTL, getDiskCache, setDiskCache, deduped } from "../cache";
 
 export const userRouter = new Hono();

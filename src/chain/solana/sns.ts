@@ -12,7 +12,7 @@ import {
   getDomainKeySync,
 } from "@bonfida/spl-name-service";
 import { HELIUS_RPC } from "./helius";
-import { MemoryCache, getDiskCache, setDiskCache, deduped } from "../cache";
+import { MemoryCache, getDiskCache, setDiskCache, deduped } from "../../cache";
 
 const TX_SIG_RE = /^[1-9A-HJ-NP-Za-km-z]{86,90}$/;
 const SITE_PATH_RE = /\/site\/([1-9A-HJ-NP-Za-km-z]{86,90})(\/[^\s?#]*)?/;

@@ -1,7 +1,7 @@
 import { Hono } from "hono";
 import { Connection, PublicKey, LAMPORTS_PER_SOL } from "@solana/web3.js";
 import { getAssociatedTokenAddress, getAccount, TokenAccountNotFoundError } from "@solana/spl-token";
-import { getTableMetaCached } from "../chain";
+import { getTableMetaCached } from "../chain/solana";
 import { MemoryCache } from "../cache";
 import { isValidPublicKey } from "../utils";
 
