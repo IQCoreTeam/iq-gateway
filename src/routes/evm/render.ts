@@ -1,9 +1,9 @@
 import { Hono } from "hono";
-import { readAsset, generateETag, decodeAssetData, detectImageType } from "../../chain/evm";
 import { imageCache, TTL, getDiskCache, setDiskCache } from "../../cache";
 import { isTxHash } from "../../utils";
+import type { EvmEnv } from "../../chain/wrappers";
 
-export const renderRouter = new Hono();
+export const renderRouter = new Hono<EvmEnv>();
 
 let Resvg: any = null;
 try {
@@ -132,14 +132,16 @@ renderRouter.get("/:txHash", async (c) => {
   if (txHash.endsWith(".png")) txHash = txHash.slice(0, -4);
   if (txHash.endsWith(".svg")) txHash = txHash.slice(0, -4);
   if (!isTxHash(txHash)) return c.text("invalid tx hash", 400);
+  const chain = c.get("chain");
+  const network = c.get("network");
 
   const isPng = Resvg !== null;
   const format = isPng ? "png" : "svg";
-  const cacheKey = `render-${format}:${txHash}`;
+  const cacheKey = `${network}:render-${format}:${txHash}`;
 
   let buf = imageCache.get(cacheKey);
   if (!buf) {
-    const disk = await getDiskCache("render", txHash);
+    const disk = await getDiskCache("render", txHash, network);
     if (disk) {
       buf = disk;
       imageCache.set(cacheKey, buf, TTL.IMAGE);
@@ -148,10 +150,10 @@ renderRouter.get("/:txHash", async (c) => {
 
   if (!buf) {
     try {
-      const { data } = await readAsset(txHash);
+      const { data } = await chain.readAsset(txHash);
       if (!data) return c.text("not found", 404);
-      const decoded = decodeAssetData(data);
-      if (detectImageType(decoded)) return c.redirect(`/img/${txHash}`, 302);
+      const decoded = chain.decodeAssetData(data);
+      if (chain.detectImageType(decoded)) return c.redirect(`/img/${txHash}`, 302);
       const text = decoded.toString("utf-8");
       const svg = generateSvg(text, txHash);
       if (isPng) {
@@ -164,7 +166,7 @@ renderRouter.get("/:txHash", async (c) => {
         buf = Buffer.from(svg, "utf-8");
       }
       imageCache.set(cacheKey, buf, TTL.IMAGE);
-      await setDiskCache("render", txHash, buf);
+      await setDiskCache("render", txHash, buf, network);
     } catch (e) {
       console.error("render error:", e instanceof Error ? e.message : e);
       return c.text("failed to render", 500);
@@ -172,7 +174,7 @@ renderRouter.get("/:txHash", async (c) => {
   }
 
   const contentType = isPng ? "image/png" : "image/svg+xml";
-  const etag = generateETag(buf);
+  const etag = chain.generateETag(buf);
   if (c.req.header("If-None-Match") === etag) return c.body(null, 304);
 
   return c.body(new Uint8Array(buf), 200, {

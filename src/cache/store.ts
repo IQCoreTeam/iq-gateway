@@ -77,11 +77,24 @@ export async function getDb(): Promise<Database> {
       path TEXT NOT NULL,
       size INTEGER NOT NULL,
       created_at INTEGER NOT NULL,
-      last_accessed INTEGER NOT NULL
+      last_accessed INTEGER NOT NULL,
+      network TEXT NOT NULL DEFAULT 'solana'
     )
   `);
+  // Multi-chain migration: existing single-chain DBs predate the `network`
+  // column. Add it idempotently — every existing row defaults to 'solana'
+  // (current prod is Solana-only), so it's lossless and nothing moves. The
+  // default-network ('solana') key/path stay unprefixed (see disk.ts), so old
+  // entries keep resolving by their original key; only non-default networks get
+  // a prefix, which is what prevents 0xABC-on-sepolia colliding with 0xABC-on-monad.
+  try {
+    db.run(`ALTER TABLE cache_entries ADD COLUMN network TEXT NOT NULL DEFAULT 'solana'`);
+  } catch {
+    // duplicate column — already migrated (or created fresh above). Expected.
+  }
   db.run(`CREATE INDEX IF NOT EXISTS idx_last_accessed ON cache_entries(last_accessed)`);
   db.run(`CREATE INDEX IF NOT EXISTS idx_type ON cache_entries(type)`);
+  db.run(`CREATE INDEX IF NOT EXISTS idx_network ON cache_entries(network)`);
   ensureCacheSearchIndex(db);
   return db;
 }
@@ -100,14 +113,15 @@ export async function recordEntry(
   key: string,
   type: "meta" | "img" | "rows" | "user" | "render" | "view" | "site" | "site-file" | "signer-index" | "sns" | "ens",
   path: string,
-  size: number
+  size: number,
+  network: string = "solana"
 ): Promise<void> {
   const db = await getDb();
   const now = Date.now();
   db.run(
-    `INSERT OR REPLACE INTO cache_entries (key, type, path, size, created_at, last_accessed)
-     VALUES (?, ?, ?, ?, ?, ?)`,
-    [key, type, path, size, now, now]
+    `INSERT OR REPLACE INTO cache_entries (key, type, path, size, created_at, last_accessed, network)
+     VALUES (?, ?, ?, ?, ?, ?, ?)`,
+    [key, type, path, size, now, now, network]
   );
   recordCacheSearchKey(db, key);
   await pruneIfNeeded();

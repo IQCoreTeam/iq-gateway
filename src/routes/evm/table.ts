@@ -1,24 +1,21 @@
 // /table/:dbRootId/:tableName/* — paginated rows, index, slice, meta,
 // notify (cache warm + SSE push), subscribe (SSE), thread resolver.
 //
-// Ports iq-gateway/src/routes/table.ts to EVM. The (dbRootId, tableName)
-// pair replaces the Solana table PDA. Rows arrive with __txHash stamped.
+// Multi-chain: chain funcs come from ctx (c.get("chain")) — the per-network EVM
+// wrapper chosen by the resolver — and `network` (c.get("network")) is folded
+// into every cache key + disk call so the same (dbRootId,tableName) / row tx
+// hash on sepolia vs monad never share a cache entry.
 
 import { Hono, type Context } from "hono";
 import { streamSSE, type SSEStreamingApi } from "hono/streaming";
 import { createHash } from "node:crypto";
-import {
-  readTableRows,
-  readSingleRow,
-  getTableMetaCached,
-  getTablelistFromRoot,
-} from "../../chain/evm";
 import { MemoryCache, TTL, getDiskCache, setDiskCache, deduped } from "../../cache";
 import { ingestRow } from "../../cache/catalog-ingest.evm";
 import { invalidateUserAssets } from "./user";
 import { isTxHash, isEvmAddress } from "../../utils";
+import type { EvmEnv, EvmWrapper } from "../../chain/wrappers";
 
-export const tableRouter = new Hono();
+export const tableRouter = new Hono<EvmEnv>();
 
 type Row = Record<string, unknown>;
 interface RowsCacheEntry {
@@ -32,6 +29,8 @@ const indexCache = new MemoryCache<string>(50);
 const sliceCache = new MemoryCache<string>(2000);
 const inflight = new Map<string, Promise<unknown>>();
 
+// network is the first component of every key, so memory caches (which are
+// process-shared across networks) stay network-isolated.
 function cacheKey(...parts: string[]): string {
   return createHash("sha256").update(parts.join(":")).digest("hex").slice(0, 24);
 }
@@ -86,14 +85,14 @@ function buildRowsResponse(dbRootId: string, tableName: string, rows: Row[], lim
   };
 }
 
-function lazyIngestRows(dbRootId: string, tableName: string, rows: Row[]): void {
+function lazyIngestRows(network: string, dbRootId: string, tableName: string, rows: Row[]): void {
   if (rows.length === 0) return;
   void (async () => {
     try {
       for (const row of rows) {
         const txHash = (row as { __txHash?: string }).__txHash;
         if (!txHash) continue;
-        await ingestRow({ row: row as Record<string, unknown>, txHash, dbrootLabel: dbRootId, tableLabel: tableName });
+        await ingestRow({ row: row as Record<string, unknown>, txHash, dbrootLabel: dbRootId, tableLabel: tableName, network });
       }
     } catch (e) {
       console.warn("[catalog] lazy ingest failed:", e instanceof Error ? e.message : e);
@@ -102,6 +101,8 @@ function lazyIngestRows(dbRootId: string, tableName: string, rows: Row[]): void 
 }
 
 async function fetchRowsCold(
+  chain: EvmWrapper,
+  network: string,
   dbRootId: string,
   tableName: string,
   key: string,
@@ -112,7 +113,7 @@ async function fetchRowsCold(
   // SDK walks the tx-chain. Apply `before` cursor in-memory since the SDK
   // doesn't accept one yet (pull a window, slice past the cursor sig).
   const window = before ? limit * 4 : limit;
-  let rows = await readTableRows(dbRootId, tableName, { limit: window });
+  let rows = await chain.readTableRows(dbRootId, tableName, { limit: window });
   if (before) {
     const idx = rows.findIndex((r) => (r as { __txHash?: string }).__txHash === before);
     rows = idx >= 0 ? rows.slice(idx + 1, idx + 1 + limit) : rows.slice(0, limit);
@@ -123,15 +124,17 @@ async function fetchRowsCold(
   const json = JSON.stringify(buildRowsResponse(dbRootId, tableName, rows, limit, before));
   const entry: RowsCacheEntry = before
     ? { json }
-    : { json, rows, lastTimestamp: (await getTableMetaCached(dbRootId, tableName))?.lastTimestamp ?? 0 };
+    : { json, rows, lastTimestamp: (await chain.getTableMetaCached(dbRootId, tableName))?.lastTimestamp ?? 0 };
   rowsCache.set(key, entry, ttl);
-  if (rows.length > 0) setDiskCache("rows", key, json).catch(() => {});
-  console.log(`[rows] ${dbRootId}/${tableName} rows=${rows.length}`);
-  lazyIngestRows(dbRootId, tableName, rows);
+  if (rows.length > 0) setDiskCache("rows", key, json, network).catch(() => {});
+  console.log(`[rows] ${network}/${dbRootId}/${tableName} rows=${rows.length}`);
+  lazyIngestRows(network, dbRootId, tableName, rows);
   return entry;
 }
 
 async function backgroundRefresh(
+  chain: EvmWrapper,
+  network: string,
   dbRootId: string,
   tableName: string,
   key: string,
@@ -141,7 +144,7 @@ async function backgroundRefresh(
   const entry = rowsCache.get(key);
   if (!entry || !entry.rows) return;
 
-  const meta = await getTableMetaCached(dbRootId, tableName);
+  const meta = await chain.getTableMetaCached(dbRootId, tableName);
   if (!meta) return;
 
   if (meta.lastTimestamp === entry.lastTimestamp) return;
@@ -149,7 +152,7 @@ async function backgroundRefresh(
   // Cheap path: pull the newest head page and merge anything we haven't seen.
   let newRows: Row[] = [];
   try {
-    newRows = await readTableRows(dbRootId, tableName, { limit });
+    newRows = await chain.readTableRows(dbRootId, tableName, { limit });
   } catch (e) {
     console.warn("[rows:bg] refresh fetch failed:", e instanceof Error ? e.message : e);
     return;
@@ -165,18 +168,20 @@ async function backgroundRefresh(
   entry.lastTimestamp = meta.lastTimestamp;
   entry.json = JSON.stringify(buildRowsResponse(dbRootId, tableName, entry.rows, limit, undefined));
   rowsCache.set(key, entry, ttl);
-  setDiskCache("rows", key, entry.json).catch(() => {});
-  console.log(`[rows:bg] ${dbRootId}/${tableName} +${trulyNew.length}`);
+  setDiskCache("rows", key, entry.json, network).catch(() => {});
+  console.log(`[rows:bg] ${network}/${dbRootId}/${tableName} +${trulyNew.length}`);
 }
 
 tableRouter.get("/:dbRootId/:tableName/rows", async (c) => {
   const dbRootId = c.req.param("dbRootId");
   const tableName = c.req.param("tableName");
+  const chain = c.get("chain");
+  const network = c.get("network");
   const limit = Math.min(Number(c.req.query("limit")) || 50, 100);
   const before = c.req.query("before") || undefined;
   const fresh = c.req.query("fresh") === "true";
 
-  const key = cacheKey(dbRootId, tableName, String(limit), before || "");
+  const key = cacheKey(network, dbRootId, tableName, String(limit), before || "");
   const isHead = !before;
   const ttl = isHead ? HEAD_TTL : TTL.ROWS;
 
@@ -185,27 +190,27 @@ tableRouter.get("/:dbRootId/:tableName/rows", async (c) => {
     if (mem) {
       if (isHead && shouldRefresh(key)) {
         deduped(inflight, rowsInflightKey("refresh", key), () =>
-          backgroundRefresh(dbRootId, tableName, key, limit, ttl),
+          backgroundRefresh(chain, network, dbRootId, tableName, key, limit, ttl),
         ).catch(() => {});
       }
       return respondWithEtag(c, { ...JSON.parse(mem.json), cached: true }, etagFor(mem.json));
     }
 
-    const disk = await getDiskCache("rows", key);
+    const disk = await getDiskCache("rows", key, network);
     if (disk) {
       const json = disk.toString("utf8");
       const entry: RowsCacheEntry = isHead
         ? { json, rows: (JSON.parse(json).rows ?? []) as Row[] }
         : { json };
       rowsCache.set(key, entry, ttl);
-      if (isHead && entry.rows) lazyIngestRows(dbRootId, tableName, entry.rows);
+      if (isHead && entry.rows) lazyIngestRows(network, dbRootId, tableName, entry.rows);
       return respondWithEtag(c, { ...JSON.parse(json), cached: true }, etagFor(json));
     }
   }
 
   try {
     const entry = await deduped(inflight, rowsInflightKey("fetch", key), () =>
-      fetchRowsCold(dbRootId, tableName, key, limit, before, ttl),
+      fetchRowsCold(chain, network, dbRootId, tableName, key, limit, before, ttl),
     );
     return respondWithEtag(c, { ...JSON.parse(entry.json), cached: false }, etagFor(entry.json));
   } catch (e) {
@@ -213,7 +218,7 @@ tableRouter.get("/:dbRootId/:tableName/rows", async (c) => {
     if (message.includes("Table not found")) {
       return c.json({ error: "table not found", dbRootId, tableName }, 404);
     }
-    const stale = await getDiskCache("rows", key);
+    const stale = await getDiskCache("rows", key, network);
     if (stale) {
       const json = stale.toString("utf8");
       const entry: RowsCacheEntry = isHead
@@ -232,12 +237,12 @@ tableRouter.get("/:dbRootId/:tableName/rows", async (c) => {
 
 const subscribers = new Map<string, Set<SSEStreamingApi>>();
 
-function subKey(dbRootId: string, tableName: string): string {
-  return `${dbRootId}::${tableName}`;
+function subKey(network: string, dbRootId: string, tableName: string): string {
+  return `${network}::${dbRootId}::${tableName}`;
 }
 
-function publishToSubscribers(dbRootId: string, tableName: string, row: Row): void {
-  const set = subscribers.get(subKey(dbRootId, tableName));
+function publishToSubscribers(network: string, dbRootId: string, tableName: string, row: Row): void {
+  const set = subscribers.get(subKey(network, dbRootId, tableName));
   if (!set || set.size === 0) return;
   const data = JSON.stringify({ row });
   for (const stream of set) stream.writeSSE({ event: "row", data }).catch(() => {});
@@ -246,14 +251,15 @@ function publishToSubscribers(dbRootId: string, tableName: string, row: Row): vo
 tableRouter.get("/:dbRootId/:tableName/subscribe", (c) => {
   const dbRootId = c.req.param("dbRootId");
   const tableName = c.req.param("tableName");
+  const network = c.get("network");
 
   return streamSSE(c, async (stream) => {
-    const k = subKey(dbRootId, tableName);
+    const k = subKey(network, dbRootId, tableName);
     let set = subscribers.get(k);
     if (!set) { set = new Set(); subscribers.set(k, set); }
     set.add(stream);
 
-    await stream.writeSSE({ event: "hello", data: JSON.stringify({ dbRootId, tableName }) });
+    await stream.writeSSE({ event: "hello", data: JSON.stringify({ dbRootId, tableName, network }) });
     try {
       while (!stream.aborted) {
         await stream.sleep(30_000);
@@ -267,7 +273,7 @@ tableRouter.get("/:dbRootId/:tableName/subscribe", (c) => {
   });
 });
 
-// ─── /table/:dbRootId/:tableName/thread/:threadName ──────────────────────────
+// ─── /table/:dbRootId/:feedName/thread/:threadName ──────────────────────────
 
 function pickOp<T extends { sub?: unknown; time?: unknown; threadSeed?: unknown }>(
   candidates: T[],
@@ -286,15 +292,17 @@ tableRouter.get("/:dbRootId/:feedName/thread/:threadName", async (c) => {
   const dbRootId = c.req.param("dbRootId");
   const feedName = c.req.param("feedName");
   const threadName = c.req.param("threadName");
+  const chain = c.get("chain");
+  const network = c.get("network");
   const replyLimit = Math.min(Number(c.req.query("replyLimit")) || 100, 500);
   const feedScan = Math.min(Number(c.req.query("feedScan")) || 100, 500);
 
-  const key = cacheKey("thread", dbRootId, feedName, threadName, String(replyLimit), String(feedScan));
+  const key = cacheKey(network, "thread", dbRootId, feedName, threadName, String(replyLimit), String(feedScan));
 
   async function fetchThread(): Promise<RowsCacheEntry> {
     const [feedRows, threadRows] = await Promise.all([
-      readTableRows(dbRootId, feedName, { limit: feedScan }),
-      readTableRows(dbRootId, threadName, { limit: replyLimit }),
+      chain.readTableRows(dbRootId, feedName, { limit: feedScan }),
+      chain.readTableRows(dbRootId, threadName, { limit: replyLimit }),
     ]);
 
     const feedForThread = feedRows.filter(
@@ -341,21 +349,23 @@ const INDEX_MAX_ROWS = 10000;
 tableRouter.get("/:dbRootId/:tableName/index", async (c) => {
   const dbRootId = c.req.param("dbRootId");
   const tableName = c.req.param("tableName");
-  const key = cacheKey("index", dbRootId, tableName);
+  const chain = c.get("chain");
+  const network = c.get("network");
+  const key = cacheKey(network, "index", dbRootId, tableName);
 
   async function fetchIndex(): Promise<string> {
-    const rows = await readTableRows(dbRootId, tableName, { limit: INDEX_MAX_ROWS });
+    const rows = await chain.readTableRows(dbRootId, tableName, { limit: INDEX_MAX_ROWS });
     const txHashes = rows.map((r) => (r as { __txHash?: string }).__txHash).filter(Boolean);
     const json = JSON.stringify({ dbRootId, tableName, txHashes, total: txHashes.length });
     indexCache.set(key, json, INDEX_TTL);
-    setDiskCache("rows", key, json).catch(() => {});
+    setDiskCache("rows", key, json, network).catch(() => {});
     return json;
   }
 
   const mem = indexCache.get(key);
   if (mem) return c.json({ ...JSON.parse(mem), cached: true });
 
-  const disk = await getDiskCache("rows", key);
+  const disk = await getDiskCache("rows", key, network);
   if (disk) {
     const json = disk.toString("utf8");
     indexCache.set(key, json, INDEX_TTL);
@@ -380,6 +390,8 @@ const SLICE_MAX = 50;
 tableRouter.get("/:dbRootId/:tableName/slice", async (c) => {
   const dbRootId = c.req.param("dbRootId");
   const tableName = c.req.param("tableName");
+  const chain = c.get("chain");
+  const network = c.get("network");
   const sigsParam = c.req.query("sigs") || c.req.query("txHashes");
   if (!sigsParam) return c.json({ error: "sigs query parameter required" }, 400);
 
@@ -388,20 +400,20 @@ tableRouter.get("/:dbRootId/:tableName/slice", async (c) => {
   if (hashes.length > SLICE_MAX) return c.json({ error: `max ${SLICE_MAX} hashes per request` }, 400);
   for (const h of hashes) if (!isTxHash(h)) return c.json({ error: `invalid tx hash: ${h}` }, 400);
 
-  const key = cacheKey("slice", dbRootId, tableName, ...hashes);
+  const key = cacheKey(network, "slice", dbRootId, tableName, ...hashes);
 
   async function fetchSlice(): Promise<string> {
     const rows: Row[] = [];
     const uncached: string[] = [];
 
     for (const h of hashes) {
-      const rowKey = cacheKey("row", h);
+      const rowKey = cacheKey(network, "row", h);
       const mem = sliceCache.get(rowKey);
       if (mem) {
         if (mem !== "null") rows.push(JSON.parse(mem));
         continue;
       }
-      const disk = await getDiskCache("meta", rowKey);
+      const disk = await getDiskCache("meta", rowKey, network);
       if (disk) {
         const json = disk.toString("utf8");
         sliceCache.set(rowKey, json, SLICE_ROW_TTL);
@@ -412,12 +424,12 @@ tableRouter.get("/:dbRootId/:tableName/slice", async (c) => {
     }
 
     for (const h of uncached) {
-      const row = await readSingleRow(h).catch(() => null);
-      const rowKey = cacheKey("row", h);
+      const row = await chain.readSingleRow(h).catch(() => null);
+      const rowKey = cacheKey(network, "row", h);
       if (row) {
         const rowJson = JSON.stringify(row);
         sliceCache.set(rowKey, rowJson, SLICE_ROW_TTL);
-        setDiskCache("meta", rowKey, rowJson).catch(() => {});
+        setDiskCache("meta", rowKey, rowJson, network).catch(() => {});
         rows.push(row);
       } else {
         sliceCache.set(rowKey, "null", SLICE_ROW_TTL);
@@ -448,8 +460,9 @@ tableRouter.get("/:dbRootId/:tableName/slice", async (c) => {
 tableRouter.get("/:dbRootId/:tableName/meta", async (c) => {
   const dbRootId = c.req.param("dbRootId");
   const tableName = c.req.param("tableName");
+  const chain = c.get("chain");
   try {
-    const meta = await getTableMetaCached(dbRootId, tableName);
+    const meta = await chain.getTableMetaCached(dbRootId, tableName);
     if (!meta) return c.json({ error: "table not found" }, 404);
     return c.json(meta);
   } catch {
@@ -462,6 +475,8 @@ tableRouter.get("/:dbRootId/:tableName/meta", async (c) => {
 tableRouter.post("/:dbRootId/:tableName/notify", async (c) => {
   const dbRootId = c.req.param("dbRootId");
   const tableName = c.req.param("tableName");
+  const chain = c.get("chain");
+  const network = c.get("network");
   const body = await c.req.json().catch(() => null);
   const txHash: string | undefined = body?.txHash || body?.txSignature;
   const rowData = body?.row;
@@ -477,11 +492,11 @@ tableRouter.post("/:dbRootId/:tableName/notify", async (c) => {
         __txHash: txHash,
         ...(typeof signer === "string" && !rowData.__signer ? { __signer: signer } : {}),
       }
-    : await readSingleRow(txHash).catch(() => null);
+    : await chain.readSingleRow(txHash).catch(() => null);
 
   if (!row) {
     for (const limit of [50, 100, 20, 10, 5]) {
-      const key = cacheKey(dbRootId, tableName, String(limit), "");
+      const key = cacheKey(network, dbRootId, tableName, String(limit), "");
       rowsCache.delete(key);
       lastRefresh.delete(key);
     }
@@ -489,12 +504,12 @@ tableRouter.post("/:dbRootId/:tableName/notify", async (c) => {
   }
 
   const rowJson = JSON.stringify(row);
-  const rowKey = cacheKey("row", txHash);
+  const rowKey = cacheKey(network, "row", txHash);
   sliceCache.set(rowKey, rowJson, SLICE_ROW_TTL);
-  setDiskCache("meta", rowKey, rowJson).catch(() => {});
+  setDiskCache("meta", rowKey, rowJson, network).catch(() => {});
 
   for (const limit of [50, 100, 20, 10, 5]) {
-    const key = cacheKey(dbRootId, tableName, String(limit), "");
+    const key = cacheKey(network, dbRootId, tableName, String(limit), "");
     const existing = rowsCache.get(key);
     if (!existing || !existing.rows) continue;
     if (existing.rows.some((r) => (r as { __txHash?: string }).__txHash === txHash)) continue;
@@ -506,14 +521,14 @@ tableRouter.post("/:dbRootId/:tableName/notify", async (c) => {
 
   const now = Date.now();
   for (const limit of [50, 100, 20, 10, 5]) {
-    lastRefresh.set(cacheKey(dbRootId, tableName, String(limit), ""), now);
+    lastRefresh.set(cacheKey(network, dbRootId, tableName, String(limit), ""), now);
   }
 
-  publishToSubscribers(dbRootId, tableName, row);
+  publishToSubscribers(network, dbRootId, tableName, row);
 
   (async () => {
     try {
-      await ingestRow({ row, txHash, dbrootLabel: dbRootId, tableLabel: tableName });
+      await ingestRow({ row, txHash, dbrootLabel: dbRootId, tableLabel: tableName, network });
     } catch {}
   })();
 
@@ -521,8 +536,7 @@ tableRouter.post("/:dbRootId/:tableName/notify", async (c) => {
 });
 
 // ─── /table/dbroot ───────────────────────────────────────────────────────────
-// Single-dbroot inspector (was /table/dbroot in iq-gateway hardcoded to "iqchan");
-// we take ?id= so any dbRootId can be inspected.
+// Single-dbroot inspector; ?id= so any dbRootId can be inspected.
 
 const dbrootSingleCache = new MemoryCache<string>(20);
 const DBROOT_TTL = 5 * 60 * 1000;
@@ -530,12 +544,14 @@ const DBROOT_TTL = 5 * 60 * 1000;
 tableRouter.get("/dbroot", async (c) => {
   const id = c.req.query("id");
   if (!id) return c.json({ error: "id query parameter required" }, 400);
-  const cacheKeyStr = `dbroot:${id}`;
+  const chain = c.get("chain");
+  const network = c.get("network");
+  const cacheKeyStr = `${network}:dbroot:${id}`;
   const cached = dbrootSingleCache.get(cacheKeyStr);
   if (cached) return c.json(JSON.parse(cached));
 
   try {
-    const root = await getTablelistFromRoot(id);
+    const root = await chain.getTablelistFromRoot(id);
     const result = {
       id,
       creator: root.creator ?? null,

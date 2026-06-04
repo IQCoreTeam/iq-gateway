@@ -11,6 +11,19 @@
 
 import { CatalogEntry, upsertCatalogEntries, upsertCatalogEntry } from "./catalog";
 import { getCachedDbRoots } from "../routes/evm/dbroots";
+import { buildEvmWrapper } from "../chain/wrappers";
+import { NETWORKS, type NetworkMode } from "../chain/evm/networks";
+
+// Which EVM networks to backfill: locked one (IQ_CHAIN=evm + IQETH_NETWORK) or
+// all of them in multi-chain mode.
+function backfillNetworks(): NetworkMode[] {
+  const all = Object.keys(NETWORKS) as NetworkMode[];
+  if (process.env.IQ_CHAIN === "evm") {
+    const n = process.env.IQETH_NETWORK as NetworkMode | undefined;
+    return n && all.includes(n) ? [n] : all;
+  }
+  return all;
+}
 
 const PRIORITY_KEYS = [
   "title", "sub", "subject", "name", "displayName",
@@ -68,12 +81,14 @@ export function rowToEntry(args: {
   txHash: string;
   dbrootLabel: string;
   tableLabel: string;
+  network?: string;
 }): CatalogEntry | null {
   const { snippet, body } = rowText(args.row);
   if (!snippet) return null;
   return {
     kind: "row",
     id: args.txHash,
+    network: args.network,
     dbroot: args.dbrootLabel,
     label: `${args.tableLabel || "(table)"} — ${snippet.slice(0, 60)}`,
     snippet,
@@ -86,42 +101,57 @@ export async function ingestRow(args: {
   txHash: string;
   dbrootLabel: string;
   tableLabel: string;
+  network?: string;
 }): Promise<void> {
   const entry = rowToEntry(args);
   if (entry) await upsertCatalogEntry(entry);
 }
 
 export async function backfillFromDbRoots(): Promise<{ dbroots: number; tables: number }> {
-  const payload = await getCachedDbRoots();
   const entries: CatalogEntry[] = [];
+  let dbrootCount = 0;
   let tables = 0;
 
-  for (const d of payload.dbroots) {
-    const dbrootLabel = d.id || d.seedHex.slice(0, 16);
-    entries.push({
-      kind: "dbroot",
-      id: d.seedHex,
-      dbroot: dbrootLabel,
-      label: dbrootLabel,
-      snippet: `DbRoot ${dbrootLabel}`,
-      body: `${dbrootLabel} ${d.id ?? ""} ${d.seedHex} ${d.creator ?? ""}`,
-    });
+  for (const network of backfillNetworks()) {
+    const wrapper = buildEvmWrapper(network);
+    let payload;
+    try {
+      payload = await getCachedDbRoots(network, wrapper.getTablelistFromRoot);
+    } catch (e) {
+      console.warn(`[catalog] backfill ${network} failed:`, e instanceof Error ? e.message : e);
+      continue;
+    }
+    dbrootCount += payload.dbroots.length;
 
-    for (const t of [...d.tables, ...d.globalTables]) {
+    for (const d of payload.dbroots) {
+      const dbrootLabel = d.id || d.seedHex.slice(0, 16);
       entries.push({
-        kind: "table",
-        id: `${d.id}:${t.name}`,
+        kind: "dbroot",
+        id: `${network}:${d.seedHex}`,
+        network,
         dbroot: dbrootLabel,
-        label: t.name || t.seedHex.slice(0, 16),
-        snippet: `${dbrootLabel} / ${t.name}`,
-        body: `${t.name} ${t.seedHex} ${dbrootLabel}`,
+        label: dbrootLabel,
+        snippet: `DbRoot ${dbrootLabel}`,
+        body: `${dbrootLabel} ${d.id ?? ""} ${d.seedHex} ${d.creator ?? ""}`,
       });
-      tables++;
+
+      for (const t of [...d.tables, ...d.globalTables]) {
+        entries.push({
+          kind: "table",
+          id: `${network}:${d.id}:${t.name}`,
+          network,
+          dbroot: dbrootLabel,
+          label: t.name || t.seedHex.slice(0, 16),
+          snippet: `${dbrootLabel} / ${t.name}`,
+          body: `${t.name} ${t.seedHex} ${dbrootLabel}`,
+        });
+        tables++;
+      }
     }
   }
 
   await upsertCatalogEntries(entries);
-  return { dbroots: payload.dbroots.length, tables };
+  return { dbroots: dbrootCount, tables };
 }
 
 let backfillTimer: ReturnType<typeof setInterval> | null = null;

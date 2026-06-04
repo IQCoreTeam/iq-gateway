@@ -4,10 +4,10 @@
 
 import { Hono } from "hono";
 import { Contract, isAddress, formatEther } from "ethers";
-import { getTableMetaCached, getProvider, NETWORK_CONFIG } from "../../chain/evm";
 import { MemoryCache } from "../../cache";
+import type { EvmEnv } from "../../chain/wrappers";
 
-export const gateRouter = new Hono();
+export const gateRouter = new Hono<EvmEnv>();
 
 const MIN_NATIVE_FOR_POST = 0n; // EVM gas is paid per tx; no SOL-rent analogue. Leave 0 unless an op wants a floor.
 const GATE_CHECK_TTL = 30_000;
@@ -21,16 +21,18 @@ gateRouter.get("/:dbRootId/:tableName/check/:wallet", async (c) => {
   const tableName = c.req.param("tableName");
   const wallet = c.req.param("wallet");
   if (!isAddress(wallet)) return c.json({ error: "invalid wallet" }, 400);
+  const chain = c.get("chain");
+  const network = c.get("network");
 
-  const cacheKey = `${dbRootId}::${tableName}::${wallet.toLowerCase()}`;
+  const cacheKey = `${network}::${dbRootId}::${tableName}::${wallet.toLowerCase()}`;
   const cached = gateCache.get(cacheKey);
   if (cached) return c.json({ ...JSON.parse(cached), cached: true });
 
   try {
-    const meta = await getTableMetaCached(dbRootId, tableName);
+    const meta = await chain.getTableMetaCached(dbRootId, tableName);
     if (!meta) return c.json({ error: "table not found" }, 404);
 
-    const provider = getProvider();
+    const provider = chain.getProvider();
     const wei = await provider.getBalance(wallet);
     const nativeBalance = Number(formatEther(wei));
     const minNative = Number(formatEther(MIN_NATIVE_FOR_POST));
@@ -55,7 +57,7 @@ gateRouter.get("/:dbRootId/:tableName/check/:wallet", async (c) => {
       tableName,
       wallet,
       nativeBalance,
-      nativeSymbol: NETWORK_CONFIG.currency,
+      nativeSymbol: chain.config.currency,
       gate: meta.gate,
       tokenBalance,
       meetsGate: meetsNative && meetsToken,
