@@ -111,6 +111,10 @@ export function detectImageType(buf: Buffer): string | null {
   if (buf[0] === 0xff && buf[1] === 0xd8) return "image/jpeg";
   if (buf[0] === 0x47 && buf[1] === 0x49) return "image/gif";
   if (buf.length > 10 && buf[8] === 0x57 && buf[9] === 0x45) return "image/webp";
+  // SVG is text, not magic-byte detectable — sniff the leading <?xml / <svg
+  // (allowing a BOM or whitespace) so it isn't served as image/png and broken.
+  const head = buf.subarray(0, 256).toString("utf8").replace(/^﻿/, "").trimStart();
+  if (/^<(\?xml|svg[\s>])/i.test(head) && /<svg[\s>]/i.test(head)) return "image/svg+xml";
   return null;
 }
 
