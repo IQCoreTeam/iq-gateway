@@ -132,7 +132,7 @@ const HTML = `<!doctype html>
                                                     |___/ </pre>
 
 <div class="meta">
-  read-only http cache for solana-permanent-web content
+  read-only http cache for IQ on-chain content — Solana + EVM
   &middot; <span id="ver">loading…</span>
   &middot; <a href="/docs">/docs</a>
   &middot; <a href="/openapi.json">/openapi.json</a>
@@ -142,20 +142,32 @@ const HTML = `<!doctype html>
 
 <h2><span class="num">$</span> what this is</h2>
 <p>
-  IQ Gateway resolves Solana on-chain content (manifests, table rows, signatures, SNS records) and serves it over HTTP with a multi-tier cache. Anyone can run their own; data is recoverable from chain so any gateway can serve any sig. This deployment is one of multiple cooperating instances.
+  IQ Gateway resolves IQ on-chain content (manifests, table rows, signatures, SNS/ENS records) and serves it over HTTP with a multi-tier cache. One process serves Solana and every supported EVM network at once. Anyone can run their own; data is recoverable from chain so any gateway can serve any id. This deployment is one of multiple cooperating instances.
 </p>
 
 <h2><span class="num">$</span> live state</h2>
 <table class="kv">
-  <tr><td>cluster</td><td class="live" id="cluster">loading…</td></tr>
+  <tr><td>mode</td><td class="live" id="mode">loading…</td></tr>
+  <tr><td>chains</td><td class="live" id="chains">loading…</td></tr>
   <tr><td>uptime</td><td class="live" id="uptime">loading…</td></tr>
-  <tr><td>helius</td><td class="live" id="helius">loading…</td></tr>
   <tr><td>rpc calls</td><td class="live" id="rpc">loading…</td></tr>
   <tr><td>cache entries</td><td class="live" id="entries">loading…</td></tr>
   <tr><td>cache size</td><td class="live" id="cachesize">loading…</td></tr>
 </table>
 
-<h2><span class="num">$</span> sns &amp; sol.site</h2>
+<h2><span class="num">$</span> networks</h2>
+<p>
+  The chain is picked per request: a <strong>base58</strong> id (Solana sig/pubkey) routes to Solana; a <strong>0x</strong> id routes to EVM. Add <code>?network=</code> to reach an EVM L2; without it, EVM ids resolve to the default network below. Same routes, same response shapes — only the underlying fetch settings differ per chain.
+</p>
+<table class="kv">
+  <tr><td>solana</td><td>base58 ids &middot; <code>?network=solana</code> &middot; SNS / sol.site hosting</td></tr>
+  <tr><td>sepolia <span class="desc">(EVM default)</span></td><td>chain 11155111 &middot; ETH &middot; <code>0x246A08D9fdD9b3990A88eD1f2DF1A87239839F07</code></td></tr>
+  <tr><td>monad</td><td>chain 143 &middot; MON &middot; <code>?network=monad</code> &middot; <code>0x7ae06f87Cf93606DA2BD6A281afB28028cAE233D</code></td></tr>
+  <tr><td>monadTestnet</td><td>chain 10143 &middot; MON &middot; <code>?network=monadTestnet</code> &middot; <code>0x3379883538C068978e199472b5D127055c734867</code></td></tr>
+</table>
+<p>EVM networks deployed depend on this operator's config; check <a href="/health">/health</a> for the live <code>chains</code> list. ENS forward/reverse lookups run against Ethereum mainnet (needs <code>ENS_RPC_ENDPOINT</code>).</p>
+
+<h2><span class="num">$</span> sns &amp; sol.site <span class="desc">(Solana only)</span></h2>
 <p>
   Set one record on your <code>.sol</code> via <a href="https://www.sns.id">sns.id</a> &mdash; a URL record pointing at this gateway &mdash; and your domain becomes browsable in three places:
 </p>
@@ -183,6 +195,7 @@ const HTML = `<!doctype html>
 <div class="ep"><code>GET /cache/info</code><span class="desc">cache stats — entries, size, by-type</span></div>
 <div class="ep"><code>GET /cache/entries</code><span class="desc">paginated disk-cache index for explorers</span></div>
 <div class="ep"><code>GET /cache/snapshot</code><span class="desc">streamed tar.gz of full cache (public; bootstrap a cold peer)</span></div>
+<p>EVM (<code>0x</code> ids, optionally <code>?network=</code>): <code>/data/{txHash}</code>, <code>/meta/{txHash}.json</code>, <code>/table/{dbRootId}/{tableName}/rows</code>, <code>/ens/{name}</code> (forward/reverse). Same shapes as the Solana routes above.</p>
 <p>full schema at <a href="/openapi.json">/openapi.json</a> &middot; interactive at <a href="/docs">/docs</a></p>
 
 <h2><span class="num">$</span> set sns to point here</h2>
@@ -195,9 +208,10 @@ const HTML = `<!doctype html>
 cd iq-gateway
 bun install
 cp .env.example .env
-# set SOLANA_CLUSTER=mainnet-beta + SOLANA_RPC_ENDPOINT
+# multi (default): set SOLANA_RPC_ENDPOINT + IQETH_RPC_* for the EVM nets you serve
+# or lock one chain: IQ_CHAIN=solana | evm
 bun run dev</div>
-<p>Containerized via the repo <code>Dockerfile</code> (chain-agnostic image; set <code>IQ_CHAIN</code> at runtime). To bootstrap a cold cache from a peer:</p>
+<p>Containerized via the repo <code>Dockerfile</code> (chain-agnostic image). Unset <code>IQ_CHAIN</code> serves every configured chain at once; set it to lock to one. To bootstrap a cold cache from a peer:</p>
 <div class="pre-code">curl -H "X-Cache-Snapshot-Token: \$TOK" \\
      https://&lt;peer-gateway&gt;/cache/snapshot | tar -xz -C ./cache</div>
 <p>Pulls the peer's full <code>cache.db</code> + blob dirs. Each entry is keyed by an on-chain identifier so you can verify any subset against chain. Skips the cold-start RPC storm.</p>
@@ -205,8 +219,8 @@ bun run dev</div>
 <h2><span class="num">$</span> caching</h2>
 <table class="kv">
   <tr><td>memory (LRU)</td><td>500 entries, 5min TTL — hot path</td></tr>
-  <tr><td>disk (sqlite)</td><td>10GB cap, evicts LRU when full — survives restarts</td></tr>
-  <tr><td>chain (solana)</td><td>permanent — source of truth</td></tr>
+  <tr><td>disk (sqlite)</td><td>10GB cap, evicts LRU when full — survives restarts. Keyed by network so chains never collide.</td></tr>
+  <tr><td>chain (solana / evm)</td><td>permanent — source of truth</td></tr>
 </table>
 <p>Negative results cached too (sentinel <code>__none__</code>) so junk lookups don't keep hitting RPC. In-flight dedup means N concurrent cold-cache requests for the same key share one upstream call.</p>
 
@@ -238,8 +252,9 @@ bun run dev</div>
   };
   try {
     const h = await fetch('/health').then(r=>r.json());
-    document.getElementById('uptime').textContent = fmtUp(h.uptime || 0);
-    document.getElementById('helius').textContent = h.rpc?.heliusEnabled ? "enabled" : "disabled";
+    document.getElementById('mode').textContent = h.mode || "?";
+    document.getElementById('chains').textContent = Array.isArray(h.chains) ? h.chains.join(", ") : "?";
+    if (typeof h.uptime === 'number') document.getElementById('uptime').textContent = fmtUp(h.uptime);
     document.getElementById('rpc').textContent = (h.rpc?.totalCalls ?? "?") + " total / " + (h.rpc?.errors ?? 0) + " err";
   } catch (e) {}
   try {
@@ -251,11 +266,6 @@ bun run dev</div>
     const c = await fetch('/cache/info').then(r=>r.json());
     document.getElementById('entries').textContent = (c.entries ?? 0).toLocaleString();
     document.getElementById('cachesize').textContent = fmt(c.totalSize ?? 0);
-  } catch (e) {}
-  try {
-    const cluster = (await fetch('/health').then(r=>r.json()))?.cluster
-                 || (location.host.includes('gateway') ? 'mainnet-beta' : '');
-    document.getElementById('cluster').textContent = cluster || 'mainnet-beta';
   } catch (e) {}
   // template the gateway origin into the example blocks
   const origin = location.origin;

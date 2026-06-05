@@ -90,7 +90,7 @@ if (MODE === "evm") {
   const { searchRouter } = await import("./routes/search");
   const { adminRouter, isAdminEnabled } = await import("./routes/admin");
   const { openapiSpec } = await import("./openapi.evm");
-  const { homeHandler } = await import("./routes/evm/home");
+  const { homeHandler } = await import("./routes/home");
   const { startCatalogBackfillJob } = await import("./cache/catalog-ingest.evm");
 
   // Locked EVM: inject the default-network wrapper so the ctx.chain handlers work.
@@ -211,13 +211,10 @@ if (MODE === "evm") {
     const pkg = await import("../package.json");
     return c.json({ version: process.env.VERSION || (pkg as { version: string }).version });
   });
-  app.get("/", (c) => c.json({
-    service: "iq-gateway",
-    mode: "multi-chain",
-    chains: networks,
-    routing: "id shape auto-detects Solana (base58) vs EVM (0x); ?network= selects an EVM L2",
-    docs: "/docs",
-  }));
+  {
+    const { homeHandler } = await import("./routes/home");
+    app.get("/", homeHandler);
+  }
 
   // Chain-specific route prefixes route by PATH, not id shape — their path
   // segment is a name/domain, not a chain id (e.g. /sns/nubs, /ens/vitalik.eth).
