@@ -1,8 +1,17 @@
 // ENS resolver — built on ethers' provider.resolveName / .lookupAddress.
-// Cached 30 min per (name|address). ENS only resolves on Ethereum mainnet,
-// so we use a dedicated mainnet provider regardless of the active gateway
-// network — Sepolia ENS is supported by the same mainnet provider via the
-// "sepolia" registrar.
+// Cached 30 min per (name|address). ENS only resolves on Ethereum MAINNET, so
+// this uses a dedicated mainnet provider independent of the active gateway
+// network. A Sepolia-only deployment (no mainnet RPC) therefore can't resolve
+// real ENS names — /ens stays mounted and 200s, but returns null until a
+// working mainnet RPC is configured. This is a config gap, not a code path:
+// set ENS_RPC_ENDPOINT to a live mainnet RPC in production.
+//
+// NOTE: the default below (eth.llamarpc.com) is unreliable — observed returning
+// HTTP 526 in prod, which is why live `/ens/<name>` came back null. Verified
+// working alternative: https://ethereum-rpc.publicnode.com (resolves
+// vitalik.eth → 0xd8dA...6045). cloudflare-eth / ankr were flaky in testing.
+// So: ENS is effectively a no-op on the current deployment until ENS_RPC_ENDPOINT
+// is pointed at a stable mainnet RPC.
 
 import { JsonRpcProvider, isAddress } from "ethers";
 import { MemoryCache, getDiskCache, setDiskCache, deduped } from "../../cache";
@@ -10,7 +19,8 @@ import { MemoryCache, getDiskCache, setDiskCache, deduped } from "../../cache";
 const ENS_TTL = 30 * 60 * 1000;
 const ENS_RPC =
   process.env.ENS_RPC_ENDPOINT ||
-  // Public mainnet RPCs work for ENS reads. Override via env in production.
+  // Fallback mainnet RPC. Unstable (526s seen in prod) — set ENS_RPC_ENDPOINT
+  // to a reliable mainnet endpoint for ENS to actually work.
   "https://eth.llamarpc.com";
 
 const ensProvider = new JsonRpcProvider(ENS_RPC);
