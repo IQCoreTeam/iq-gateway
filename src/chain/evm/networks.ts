@@ -14,7 +14,7 @@ export interface NetworkConfig {
 export const NETWORKS: Record<NetworkMode, NetworkConfig> = {
   sepolia: {
     chainId: 11155111,
-    defaultRpc: "https://rpc.sepolia.org",
+    defaultRpc: "https://ethereum-sepolia-rpc.publicnode.com",
     contractAddress: "0x246A08D9fdD9b3990A88eD1f2DF1A87239839F07",
     currency: "ETH",
     explorer: "https://sepolia.etherscan.io",
