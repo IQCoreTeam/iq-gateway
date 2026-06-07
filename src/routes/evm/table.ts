@@ -215,7 +215,7 @@ tableRouter.get("/:dbRootId/:tableName/rows", async (c) => {
     return respondWithEtag(c, { ...JSON.parse(entry.json), cached: false }, etagFor(entry.json));
   } catch (e) {
     const message = e instanceof Error ? e.message : "unknown error";
-    if (message.includes("Table not found")) {
+    if (message.includes("Table not found") || message.includes("DbRoot not found")) {
       return c.json({ error: "table not found", dbRootId, tableName }, 404);
     }
     const stale = await getDiskCache("rows", key, network);
