@@ -166,20 +166,66 @@ async function fetchFile(sig: string): Promise<Buffer> {
   });
 }
 
-export function buildFileResponse(buf: Buffer, filePath: string): Response {
+// Parse a single-range "bytes=start-end" header against a known total size.
+// Returns null for absent/unsatisfiable/multi-range headers — callers fall back
+// to a full 200 response. iOS Safari only ever sends a single open range, so we
+// deliberately don't support multipart ranges.
+function parseRange(
+  range: string | undefined,
+  size: number,
+): { start: number; end: number } | null {
+  if (!range) return null;
+  const m = /^bytes=(\d*)-(\d*)$/.exec(range.trim());
+  if (!m) return null;
+  const [, rawStart, rawEnd] = m;
+  if (rawStart === "" && rawEnd === "") return null;
+
+  let start: number;
+  let end: number;
+  if (rawStart === "") {
+    // suffix range: last N bytes
+    const suffix = Number(rawEnd);
+    if (suffix <= 0) return null;
+    start = Math.max(0, size - suffix);
+    end = size - 1;
+  } else {
+    start = Number(rawStart);
+    end = rawEnd === "" ? size - 1 : Math.min(Number(rawEnd), size - 1);
+  }
+
+  if (!Number.isFinite(start) || !Number.isFinite(end)) return null;
+  if (start > end || start >= size) return null;
+  return { start, end };
+}
+
+export function buildFileResponse(
+  buf: Buffer,
+  filePath: string,
+  range?: string | null,
+): Response {
   const mime = getMimeType(filePath);
   const isImmutable = !filePath.endsWith(".html") && !filePath.endsWith(".htm");
-  return new Response(new Uint8Array(buf), {
-    status: 200,
-    headers: {
-      "Content-Type": mime,
-      "Cache-Control": isImmutable
-        ? "public, max-age=31536000, immutable"
-        : "public, max-age=300",
-      "Access-Control-Allow-Origin": "*",
-      ETag: generateETag(buf),
-    },
-  });
+  const headers: Record<string, string> = {
+    "Content-Type": mime,
+    "Cache-Control": isImmutable
+      ? "public, max-age=31536000, immutable"
+      : "public, max-age=300",
+    "Access-Control-Allow-Origin": "*",
+    // Advertise range support so iOS Safari will stream <video>/<audio> sources.
+    // Without this, mobile Safari refuses to play media served as a plain 200.
+    "Accept-Ranges": "bytes",
+    ETag: generateETag(buf),
+  };
+
+  const parsed = parseRange(range ?? undefined, buf.length);
+  if (parsed) {
+    const { start, end } = parsed;
+    const slice = buf.subarray(start, end + 1);
+    headers["Content-Range"] = `bytes ${start}-${end}/${buf.length}`;
+    return new Response(new Uint8Array(slice), { status: 206, headers });
+  }
+
+  return new Response(new Uint8Array(buf), { status: 200, headers });
 }
 
 export function resolveFile(manifest: Manifest, filePath: string): string | null {
@@ -197,8 +243,9 @@ export async function serveManifestPath(input: {
   indexPath?: string;
   spaFallback?: boolean;
   ifNoneMatch?: string | null;
+  range?: string | null;
 }): Promise<Response> {
-  const { manifestSig, filePath, indexPath, spaFallback, ifNoneMatch } = input;
+  const { manifestSig, filePath, indexPath, spaFallback, ifNoneMatch, range } = input;
 
   let manifest: Manifest;
   try {
@@ -250,10 +297,14 @@ export async function serveManifestPath(input: {
     );
   }
 
-  const res = buildFileResponse(buf, servePath);
-  const etag = res.headers.get("ETag");
-  if (etag && ifNoneMatch === etag) {
-    return new Response(null, { status: 304, headers: { ETag: etag } });
+  const res = buildFileResponse(buf, servePath, range);
+  // A range request wants bytes, not a 304 — only short-circuit to Not Modified
+  // for full requests.
+  if (res.status !== 206) {
+    const etag = res.headers.get("ETag");
+    if (etag && ifNoneMatch === etag) {
+      return new Response(null, { status: 304, headers: { ETag: etag } });
+    }
   }
   return res;
 }
@@ -294,6 +345,7 @@ siteRouter.get("/:sig{.+}", async (c) => {
     filePath,
     spaFallback: true,
     ifNoneMatch: c.req.header("If-None-Match") ?? null,
+    range: c.req.header("Range") ?? null,
   });
 
   if (response.status === 304) return c.body(null, 304);
@@ -301,5 +353,5 @@ siteRouter.get("/:sig{.+}", async (c) => {
   const headers: Record<string, string> = {};
   response.headers.forEach((v, k) => { headers[k] = v; });
   const body = await response.arrayBuffer();
-  return c.body(body, response.status as 200, headers);
+  return c.body(body, response.status as 200 | 206, headers);
 });
