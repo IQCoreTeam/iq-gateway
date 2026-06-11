@@ -132,17 +132,38 @@ export function resolveDomainOwner(domain: string, fresh = false): Promise<strin
   });
 }
 
-// The SOL record value (what the owner pointed the domain at — a wallet or
-// PDA, as base58). The SOL record stores raw 32 bytes, so we let the SDK
-// deserialize it to base58 rather than utf-8-decoding (unlike the URL/TXT
-// record, which is a string). null if unset. The browser classifies the value.
+// The SOL record stores raw 32 bytes → a base58 pubkey/PDA. Deserialize it
+// rather than utf-8-decoding. null if unset/missing.
+async function readSolRecord(domain: string): Promise<string | null> {
+  try {
+    const res = await getRecordV2(conn, domain, Record.SOL, { deserialize: true });
+    return res?.deserializedContent?.trim() || null;
+  } catch (e) {
+    return nullIfMissingElseThrow(e);
+  }
+}
+
+// The CNAME record is a free-form string, so it can carry a full URL with a
+// path (e.g. "browser.iqlabs.dev/<pda>") — unlike SOL, which only fits a bare
+// pubkey. Read the raw content by header.contentLength (deserializedContent
+// truncates URLs — see resolveDomainToSig); the browser extracts the target.
+async function readCnameRecord(domain: string): Promise<string | null> {
+  try {
+    const res = await getRecordV2(conn, domain, Record.CNAME);
+    const data = res?.retrievedRecord?.data;
+    const cl = res?.retrievedRecord?.header?.contentLength;
+    if (!data || typeof cl !== "number" || cl <= 0 || cl > data.length) return null;
+    return Buffer.from(data).slice(data.length - cl).toString("utf-8").trim() || null;
+  } catch (e) {
+    return nullIfMissingElseThrow(e);
+  }
+}
+
+// What the owner pointed the domain at — the SOL record (a bare pubkey/PDA) if
+// set, else the CNAME record (a URL the browser reduces to a target). null if
+// neither is set. The browser classifies the value.
 export function resolveDomainRecord(domain: string, fresh = false): Promise<string | null> {
   return cachedDomainLookup("record", domain, fresh, async () => {
-    try {
-      const res = await getRecordV2(conn, domain, Record.SOL, { deserialize: true });
-      return res?.deserializedContent?.trim() || null;
-    } catch (e) {
-      return nullIfMissingElseThrow(e);
-    }
+    return (await readSolRecord(domain)) ?? (await readCnameRecord(domain));
   });
 }
