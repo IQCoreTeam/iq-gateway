@@ -12,7 +12,7 @@
 
 import type { Context } from "hono";
 import { Hono } from "hono";
-import { resolveDomainToSig, resolveDomainOwner, resolveDomainRecord, resolveDomainUrl } from "../chain/solana/sns";
+import { resolveDomainToSig, resolveDomainOwner, resolveDomainRecord, resolveDomainUrl, resolveDomainPointer } from "../chain/solana/sns";
 import { isSafePath } from "../site-hosts";
 
 export const snsRouter = new Hono();
@@ -35,6 +35,21 @@ snsRouter.get("/tls-check", async (c) => {
   } catch {
     // RPC failure — fail closed (don't mint a cert we can't verify).
     return c.text("sns lookup failed", 403);
+  }
+});
+
+// GET /sns/<domain>/pointer → JSON {domain, pointer}. The host-routing target:
+// the SOL record (a bare pubkey/PDA) if set, else the TXT record. CNAME and URL
+// are deliberately not consulted. `?fresh=1` skips the cache.
+snsRouter.get("/:domain/pointer", async (c) => {
+  const domain = c.req.param("domain").replace(/\.sol(\.site)?$/i, "").toLowerCase();
+  if (!domain) return c.text("missing domain", 400);
+  const fresh = c.req.query("fresh") === "1";
+  try {
+    const pointer = await resolveDomainPointer(domain, fresh);
+    return c.json({ domain: `${domain}.sol`, pointer });
+  } catch {
+    return c.json({ error: "SNS lookup failed (RPC)" }, 503);
   }
 });
 

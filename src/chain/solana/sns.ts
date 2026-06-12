@@ -189,3 +189,28 @@ async function readUrlRecord(domain: string): Promise<string | null> {
 export function resolveDomainUrl(domain: string, fresh = false): Promise<string | null> {
   return cachedDomainLookup("url", domain, fresh, () => readUrlRecord(domain));
 }
+
+// The raw TXT record string, verbatim. Free-form like CNAME/URL, so read by
+// header.contentLength (deserializedContent truncates). null if unset/missing.
+async function readTxtRecord(domain: string): Promise<string | null> {
+  try {
+    const res = await getRecordV2(conn, domain, Record.TXT);
+    const data = res?.retrievedRecord?.data;
+    const cl = res?.retrievedRecord?.header?.contentLength;
+    if (!data || typeof cl !== "number" || cl <= 0 || cl > data.length) return null;
+    return Buffer.from(data).slice(data.length - cl).toString("utf-8").trim() || null;
+  } catch (e) {
+    return nullIfMissingElseThrow(e);
+  }
+}
+
+// What the owner pointed the domain at, for host-routing: the SOL record (a
+// bare pubkey/PDA — the natural home for a dispatcher target) if set, else the
+// TXT record (a free-form fallback). CNAME and URL are intentionally NOT read
+// here: CNAME is the sol.site DNS alias (not a content pointer) and URL is the
+// canonical browser website link, which we don't repurpose. null if neither.
+export function resolveDomainPointer(domain: string, fresh = false): Promise<string | null> {
+  return cachedDomainLookup("pointer", domain, fresh, async () => {
+    return (await readSolRecord(domain)) ?? (await readTxtRecord(domain));
+  });
+}
