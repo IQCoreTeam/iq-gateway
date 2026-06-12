@@ -17,6 +17,27 @@ import { isSafePath } from "../site-hosts";
 
 export const snsRouter = new Hono();
 
+// GET /sns/tls-check?domain=<host> → 200 if <host> is a .sol.site whose .sol
+// domain has an on-chain URL record, else 403. This is the gate for Caddy's
+// on-demand TLS (`on_demand_tls { ask ... }`): the edge asks before issuing a
+// per-host Let's Encrypt cert, so a cert is only minted for sol.site hosts that
+// actually point at a site — not for arbitrary names that would burn the LE
+// rate limit. Caddy treats any 2xx as "allowed" and anything else as "deny".
+snsRouter.get("/tls-check", async (c) => {
+  const host = (c.req.query("domain") ?? "").toLowerCase().trim();
+  // Only gate *.sol.site, single-label (matches the wildcard route). Reject
+  // anything else outright so the cert resolver never fires for it.
+  const m = host.match(/^([a-z0-9-]+)\.sol\.site$/);
+  if (!m) return c.text("not a sol.site host", 403);
+  try {
+    const url = await resolveDomainUrl(m[1], false);
+    return url ? c.text("ok", 200) : c.text("no url record", 403);
+  } catch {
+    // RPC failure — fail closed (don't mint a cert we can't verify).
+    return c.text("sns lookup failed", 403);
+  }
+});
+
 // GET /sns/<domain>/url → JSON {domain, url}. The raw URL record string,
 // verbatim (e.g. "browser.iqlabs.dev/<pda>" or "gateway.iqlabs.dev/site/<sig>/
 // <file>"). Unlike /record (302 into /site, sig-shaped values only), this hands
