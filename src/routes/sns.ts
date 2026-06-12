@@ -30,8 +30,11 @@ snsRouter.get("/tls-check", async (c) => {
   const m = host.match(/^([a-z0-9-]+)\.sol\.site$/);
   if (!m) return c.text("not a sol.site host", 403);
   try {
-    const url = await resolveDomainUrl(m[1], false);
-    return url ? c.text("ok", 200) : c.text("no url record", 403);
+    // Mint a cert only when the domain has a host-routing pointer (SOL record,
+    // else TXT) — the same source the proxy resolves. Keeps the cert gate in
+    // lock-step with what actually serves.
+    const pointer = await resolveDomainPointer(m[1], false);
+    return pointer ? c.text("ok", 200) : c.text("no pointer record", 403);
   } catch {
     // RPC failure — fail closed (don't mint a cert we can't verify).
     return c.text("sns lookup failed", 403);
