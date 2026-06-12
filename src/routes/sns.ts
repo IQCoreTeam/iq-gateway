@@ -12,10 +12,27 @@
 
 import type { Context } from "hono";
 import { Hono } from "hono";
-import { resolveDomainToSig, resolveDomainOwner, resolveDomainRecord } from "../chain/solana/sns";
+import { resolveDomainToSig, resolveDomainOwner, resolveDomainRecord, resolveDomainUrl } from "../chain/solana/sns";
 import { isSafePath } from "../site-hosts";
 
 export const snsRouter = new Hono();
+
+// GET /sns/<domain>/url → JSON {domain, url}. The raw URL record string,
+// verbatim (e.g. "browser.iqlabs.dev/<pda>" or "gateway.iqlabs.dev/site/<sig>/
+// <file>"). Unlike /record (302 into /site, sig-shaped values only), this hands
+// the caller the unparsed value so a client like browser host-routing can
+// interpret any URL shape itself. `?fresh=1` skips the cache.
+snsRouter.get("/:domain/url", async (c) => {
+  const domain = c.req.param("domain").replace(/\.sol(\.site)?$/i, "").toLowerCase();
+  if (!domain) return c.text("missing domain", 400);
+  const fresh = c.req.query("fresh") === "1";
+  try {
+    const url = await resolveDomainUrl(domain, fresh);
+    return c.json({ domain: `${domain}.sol`, url });
+  } catch {
+    return c.json({ error: "SNS lookup failed (RPC)" }, 503);
+  }
+});
 
 snsRouter.get("/:domain", async (c) => {
   const domain = c.req.param("domain").replace(/\.sol(\.site)?$/i, "").toLowerCase();

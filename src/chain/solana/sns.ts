@@ -167,3 +167,25 @@ export function resolveDomainRecord(domain: string, fresh = false): Promise<stri
     return (await readSolRecord(domain)) ?? (await readCnameRecord(domain));
   });
 }
+
+// The raw URL record string, verbatim — unlike resolveDomainToSig, which only
+// surfaces a sig when the value is a bare signature or a /site/<sig> URL. A
+// free-form value like "browser.iqlabs.dev/<pda>" is returned as-is so the
+// caller (e.g. browser host-routing) can decide how to interpret it. Reads by
+// header.contentLength like readCnameRecord (deserializedContent truncates
+// URLs). null if unset/missing.
+async function readUrlRecord(domain: string): Promise<string | null> {
+  try {
+    const res = await getRecordV2(conn, domain, Record.Url);
+    const data = res?.retrievedRecord?.data;
+    const cl = res?.retrievedRecord?.header?.contentLength;
+    if (!data || typeof cl !== "number" || cl <= 0 || cl > data.length) return null;
+    return Buffer.from(data).slice(data.length - cl).toString("utf-8").trim() || null;
+  } catch (e) {
+    return nullIfMissingElseThrow(e);
+  }
+}
+
+export function resolveDomainUrl(domain: string, fresh = false): Promise<string | null> {
+  return cachedDomainLookup("url", domain, fresh, () => readUrlRecord(domain));
+}
