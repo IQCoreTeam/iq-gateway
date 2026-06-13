@@ -190,15 +190,13 @@ export function resolveDomainUrl(domain: string, fresh = false): Promise<string 
   return cachedDomainLookup("url", domain, fresh, () => readUrlRecord(domain));
 }
 
-// The raw TXT record string, verbatim. Free-form like CNAME/URL, so read by
-// header.contentLength (deserializedContent truncates). null if unset/missing.
+// The TXT record string. Use the SDK's deserialize path (NOT a raw
+// header.contentLength slice — that's off by one byte and leaves a trailing
+// junk char, e.g. "<pda>-"). null if unset/missing.
 async function readTxtRecord(domain: string): Promise<string | null> {
   try {
-    const res = await getRecordV2(conn, domain, Record.TXT);
-    const data = res?.retrievedRecord?.data;
-    const cl = res?.retrievedRecord?.header?.contentLength;
-    if (!data || typeof cl !== "number" || cl <= 0 || cl > data.length) return null;
-    return Buffer.from(data).slice(data.length - cl).toString("utf-8").trim() || null;
+    const res = await getRecordV2(conn, domain, Record.TXT, { deserialize: true });
+    return res?.deserializedContent?.trim() || null;
   } catch (e) {
     return nullIfMissingElseThrow(e);
   }
