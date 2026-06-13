@@ -87,6 +87,7 @@ async function cachedDomainLookup(
   domain: string,
   fresh: boolean,
   fetcher: () => Promise<string | null>,
+  ttlMs: number = DAY_MS,
 ): Promise<string | null> {
   const key = `${kind}:${domain.toLowerCase()}`;
 
@@ -96,17 +97,17 @@ async function cachedDomainLookup(
     const disk = await getDiskCache("sns", key);
     if (disk) {
       const v = disk.toString();
-      snsCache.set(key, v, DAY_MS);
+      snsCache.set(key, v, ttlMs);
       return v === NEGATIVE_MARKER ? null : v;
     }
   }
 
   // The fetcher returns null for a genuine miss (domain/record doesn't exist)
   // and throws on RPC failure (429, timeout). Only cache the miss — a transient
-  // RPC error must not get pinned for a day, so we let it propagate uncached.
+  // RPC error must not get pinned, so we let it propagate uncached.
   const stored = await deduped(snsInflight, key, async () => (await fetcher()) ?? NEGATIVE_MARKER);
 
-  snsCache.set(key, stored, DAY_MS);
+  snsCache.set(key, stored, ttlMs);
   await setDiskCache("sns", key, Buffer.from(stored));
   return stored === NEGATIVE_MARKER ? null : stored;
 }
@@ -208,7 +209,10 @@ async function readTxtRecord(domain: string): Promise<string | null> {
 // here: CNAME is the sol.site DNS alias (not a content pointer) and URL is the
 // canonical browser website link, which we don't repurpose. null if neither.
 export function resolveDomainPointer(domain: string, fresh = false): Promise<string | null> {
+  // Short TTL (5 min, unlike the day-long owner/record/url lookups): the pointer
+  // is what host-routing serves from, so a freshly-changed SOL/TXT record should
+  // go live quickly rather than be pinned for a day.
   return cachedDomainLookup("pointer", domain, fresh, async () => {
     return (await readSolRecord(domain)) ?? (await readTxtRecord(domain));
-  });
+  }, SNS_TTL_MS);
 }
