@@ -529,6 +529,136 @@ tableRouter.get("/:feedPda/thread/:threadPda", async (c) => {
   }
 });
 
+// ─── /table/:tablePda/threads ────────────────────────────────────────────────
+// AgentNet reviews model (GH #101): a comment section is ONE table, and a reply
+// is an ordinary row carrying meta.parentId = id of the row it answers. This
+// returns the whole section grouped into threads in one call, so mobile / vscode
+// / cli render instead of each re-deriving the tree from a flat list. Mirrors
+// core threadReplies (AgentNet packages/core notes.ts): 2-level render cap (every
+// descendant flattens under its top-level ancestor, keeping parentAuthor for an
+// @author ref), orphan parentId → top-level, cycle-safe. Distinct from
+// /:feedPda/thread/:threadPda above, which is iq-chan's two-table + `sub` model.
+
+type NoteRow = Record<string, unknown> & { id?: string; author?: string; timestamp?: number };
+
+// parentId lives inside the note's `meta` (no top-level column — see AgentNet
+// seed.ts REVIEW_COLUMNS). `meta` may arrive as an object or a JSON string; a
+// row with malformed meta just reads as top-level rather than failing the call.
+function noteParentId(row: NoteRow): string | undefined {
+  if (typeof row.parentId === "string") return row.parentId;
+  const meta = row.meta;
+  const obj =
+    meta && typeof meta === "object"
+      ? (meta as Record<string, unknown>)
+      : typeof meta === "string"
+        ? tryParseObject(meta)
+        : undefined;
+  const parentId = obj?.parentId;
+  return typeof parentId === "string" ? parentId : undefined;
+}
+
+function tryParseObject(s: string): Record<string, unknown> | undefined {
+  try {
+    const v = JSON.parse(s);
+    return v && typeof v === "object" ? (v as Record<string, unknown>) : undefined;
+  } catch {
+    return undefined;
+  }
+}
+
+interface Thread {
+  op: NoteRow;
+  replies: NoteRow[];
+  totalReplies: number;
+}
+
+// Group flat rows into threads by parentId. Same rules as core threadReplies so
+// the server result and the client fallback agree. Top-level order follows input
+// order (newest-first from the signature scan); replies sort oldest-first.
+function groupThreads(rows: NoteRow[]): Thread[] {
+  const byId = new Map<string, NoteRow>();
+  for (const r of rows) if (typeof r.id === "string") byId.set(r.id, r);
+
+  const rootOf = (n: NoteRow): NoteRow => {
+    let cur = n;
+    for (let hops = 0; hops < byId.size; hops++) {
+      const pid = noteParentId(cur);
+      const parent = pid ? byId.get(pid) : undefined;
+      if (!parent) return cur; // no/orphan parent → top-level
+      cur = parent;
+    }
+    return cur; // cycle guard: bounded by row count
+  };
+
+  const nodes = new Map<string, Thread>();
+  const order: string[] = [];
+  const ensure = (op: NoteRow): Thread => {
+    const id = op.id as string;
+    let node = nodes.get(id);
+    if (!node) {
+      node = { op, replies: [], totalReplies: 0 };
+      nodes.set(id, node);
+      order.push(id);
+    }
+    return node;
+  };
+
+  for (const n of rows) {
+    if (typeof n.id !== "string") continue;
+    const root = rootOf(n);
+    if (root.id === n.id) {
+      ensure(n);
+    } else {
+      const pid = noteParentId(n);
+      const parentAuthor = pid ? byId.get(pid)?.author : undefined;
+      ensure(root).replies.push({ ...n, parentAuthor });
+    }
+  }
+
+  for (const node of nodes.values()) {
+    node.replies.sort((a, b) => (a.timestamp ?? 0) - (b.timestamp ?? 0));
+    node.totalReplies = node.replies.length;
+  }
+  return order.map((id) => nodes.get(id)!);
+}
+
+tableRouter.get("/:tablePda/threads", async (c) => {
+  const tablePda = c.req.param("tablePda");
+  const limit = Math.min(Number(c.req.query("limit")) || 100, 500);
+
+  if (!isValidPublicKey(tablePda)) {
+    return c.json({ error: "invalid table PDA" }, 400);
+  }
+
+  const key = cacheKey("threads", tablePda, String(limit));
+
+  async function fetchThreads(): Promise<RowsCacheEntry> {
+    const signatures = await fetchRecentSignatures(tablePda, limit);
+    const rows = (await resolveRowsFromSignatures(signatures)) as NoteRow[];
+    const threads = groupThreads(rows);
+    const json = JSON.stringify({ tablePda, threads, count: rows.length });
+    const entry: RowsCacheEntry = { json };
+    rowsCache.set(key, entry, HEAD_TTL);
+    console.log(`[threads] ${tablePda.slice(0, 8)} rows=${rows.length} threads=${threads.length}`);
+    return entry;
+  }
+
+  const mem = rowsCache.get(key);
+  if (mem) {
+    if (shouldRefresh(key)) deduped(inflight, key, fetchThreads).catch(() => {});
+    return respondWithEtag(c, { ...JSON.parse(mem.json), cached: true }, etagFor(mem.json));
+  }
+
+  try {
+    const entry = await deduped(inflight, key, fetchThreads);
+    return respondWithEtag(c, { ...JSON.parse(entry.json), cached: false }, etagFor(entry.json));
+  } catch (e) {
+    const message = e instanceof Error ? e.message : "unknown error";
+    console.error(`[threads] failed for ${tablePda}:`, message);
+    return c.json({ error: "failed to read threads" }, 500);
+  }
+});
+
 // ─── /table/:tablePda/index ──────────────────────────────────────────────────
 
 const INDEX_TTL = 2 * 60 * 1000; // 2 min
