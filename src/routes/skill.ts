@@ -133,6 +133,11 @@ skillRouter.get("/:mint/:file", async (c) => {
       ...data.hashtags.map((value) => ({ trait_type: "skill", value })),
     ],
     inscription: sig, // the on-chain data path (also the last uri segment)
+    // Extras beyond the marketplace standard (harmless there), consumed by the
+    // render layer (browser.iqlabs.dev) so the card route needs no chain code.
+    creator: data.creator,
+    priceLamports: data.priceLamports,
+    itemType: data.type,
     properties: { files: [{ uri: image, type: "image/png" }], category: "image" },
   };
   const jsonStr = JSON.stringify(json);
