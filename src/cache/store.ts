@@ -111,7 +111,7 @@ export async function getTotalSize(): Promise<number> {
 
 export async function recordEntry(
   key: string,
-  type: "meta" | "img" | "rows" | "user" | "render" | "view" | "site" | "site-file" | "signer-index" | "sns" | "ens" | "skillimg",
+  type: "meta" | "img" | "rows" | "user" | "render" | "view" | "site" | "site-file" | "signer-index" | "sns" | "ens",
   path: string,
   size: number,
   network: string = "solana"

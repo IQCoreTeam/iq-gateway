@@ -1,24 +1,29 @@
-// AgentNet skill/workflow NFT presentation, keyed by BOTH identifiers the mint
-// uri carries: /skill/{mint}/{sig} serves standard NFT JSON, /skill/{mint}/{sig}.png
-// the terminal card image. External viewers (marketplaces, explorers, wallets)
-// fetch the mint's uri over HTTP expecting JSON with an image field; AgentNet
-// mints inscribe their content on-chain instead, so this route presents that
-// content. Everything is assembled from chain only:
+// AgentNet skill/workflow NFT data, keyed by BOTH identifiers the mint uri
+// carries: /skill/{mint}/{sig} serves standard NFT JSON assembled purely from
+// chain. External viewers (marketplaces, explorers, wallets) fetch the mint's
+// uri over HTTP expecting JSON with an image field; AgentNet mints inscribe
+// their content on-chain instead, so this route presents that content:
 //   - name/type      -> the Token-2022 mint account (tokenMetadata + tokenGroupMember)
 //   - description/traits/category -> the code-in inscription (sig)
 //   - creator/price  -> the gate program's ItemConfig PDA (["item", mint])
 // No index or database: any mint resolves the moment it exists on-chain.
+//
+// Layering: this is the CACHE layer (on-chain data and its assembly). The
+// card IMAGE is generated pixels, which is the render layer's job — it lives
+// on browser.iqlabs.dev (iq-wide-web), which draws from this one JSON. The
+// .png path here only 301s across for anything that cached the old URL.
 import { Hono } from "hono";
 import { Connection, PublicKey } from "@solana/web3.js";
 import { readAsset, generateETag, HELIUS_RPC } from "../chain/solana";
-import { metaCache, imageCache, TTL, getDiskCache, setDiskCache } from "../cache";
-import { renderCard, type CardData } from "../skill-card/card";
+import { metaCache } from "../cache";
 
 export const skillRouter = new Hono();
 
 // AgentNet matched set (env override for devnet runs). Must match seed.ts.
 const GATE_PROGRAM = new PublicKey(process.env.AGENTNET_GATE_PROGRAM || "8YmcHuCx323RtqC8mzTJ5CH4oVT8mPKJ7xarcPKbdgof");
 const WORKFLOWS_COLLECTION = process.env.AGENTNET_WORKFLOWS_COLLECTION || "6vmWMRWUD34LEjA8eGefegKe5E38WufveMAe2pTm61i8";
+// The render layer that draws the card image from this route's JSON.
+const BROWSER_URL = (process.env.BROWSER_URL || "https://browser.iqlabs.dev").replace(/\/+$/, "");
 
 const conn = new Connection(HELIUS_RPC || process.env.SOLANA_RPC_ENDPOINT || "https://api.mainnet-beta.solana.com");
 
@@ -36,17 +41,25 @@ interface SkillContent {
   attributes?: Trait[];
 }
 
+interface SkillData {
+  name: string;
+  type: "skill" | "workflow";
+  description: string;
+  attributes: Trait[];
+  creator: string | null;
+  priceLamports: string | null;
+}
+
 // ItemConfig (Anchor): disc(8) + bump(1) + item_mint(32) + creator(32) + price(u64 LE)
 const OFF_CREATOR = 41;
 const OFF_PRICE = 73;
 
-/** Assemble the card data from chain (memory+disk cached as JSON). The card
- *  excludes mutable market fields, but price CAN move on the ItemConfig, so
- *  the assembled blob gets a 1h memory TTL rather than immutable. */
-async function loadCard(mint: string, sig: string): Promise<CardData | null> {
+/** Assemble the item data from chain (memory cached as JSON). Price CAN move
+ *  on the ItemConfig, so the blob gets a 1h TTL rather than immutable. */
+async function loadSkill(mint: string, sig: string): Promise<SkillData | null> {
   const cacheKey = `skillcard:${mint}:${sig}`;
   const cached = metaCache.get(cacheKey);
-  if (cached) return JSON.parse(cached) as CardData;
+  if (cached) return JSON.parse(cached) as SkillData;
 
   const mintPk = new PublicKey(mint);
   const [mintInfo, asset, itemConfig] = await Promise.all([
@@ -68,17 +81,15 @@ async function loadCard(mint: string, sig: string): Promise<CardData | null> {
     try {
       content = JSON.parse(typeof asset.data === "string" ? asset.data : Buffer.from(asset.data).toString("utf8")) as SkillContent;
     } catch {
-      // inscription is not JSON: render from mint fields alone
+      // inscription is not JSON: present the mint fields alone
     }
   }
-  const attrs = Array.isArray(content.attributes) ? content.attributes : [];
 
-  const data: CardData = {
+  const data: SkillData = {
     name: tokenMeta.name,
     type: member?.group === WORKFLOWS_COLLECTION ? "workflow" : "skill",
-    category: attrs.find((t) => t.trait_type === "category")?.value,
-    hashtags: attrs.filter((t) => t.trait_type === "skill").map((t) => t.value),
     description: content.description ?? "",
+    attributes: Array.isArray(content.attributes) ? content.attributes : [],
     creator: itemConfig && itemConfig.data.length >= OFF_PRICE + 8 ? new PublicKey(itemConfig.data.subarray(OFF_CREATOR, OFF_CREATOR + 32)).toBase58() : null,
     priceLamports: itemConfig && itemConfig.data.length >= OFF_PRICE + 8 ? itemConfig.data.readBigUInt64LE(OFF_PRICE).toString() : null,
   };
@@ -93,48 +104,23 @@ skillRouter.get("/:mint/:file", async (c) => {
   if (wantsImage) sig = sig.slice(0, -4);
   if (!PUBKEY_RE.test(mint) || !SIG_RE.test(sig)) return c.json({ error: "expected /skill/{mint}/{inscription-sig}[.png]" }, 400);
 
-  if (wantsImage) {
-    const cacheKey = `skillimg:${mint}:${sig}`;
-    let buf = imageCache.get(cacheKey);
-    if (!buf) {
-      const disk = await getDiskCache("skillimg", `${mint}-${sig}`);
-      if (disk) {
-        buf = disk;
-        imageCache.set(cacheKey, buf, TTL.IMAGE);
-      }
-    }
-    if (!buf) {
-      const data = await loadCard(mint, sig);
-      if (!data) return c.text("not found", 404);
-      buf = renderCard(data);
-      imageCache.set(cacheKey, buf, TTL.IMAGE);
-      await setDiskCache("skillimg", `${mint}-${sig}`, buf);
-    }
-    return c.body(new Uint8Array(buf) as Uint8Array<ArrayBuffer>, 200, {
-      "Content-Type": "image/png",
-      "Cache-Control": "public, max-age=86400, stale-while-revalidate=604800",
-    });
-  }
+  // The image is rendered by the render layer; anything holding the old
+  // gateway .png URL follows across.
+  if (wantsImage) return c.redirect(`${BROWSER_URL}/skill/${mint}/${sig}.png`, 301);
 
-  const data = await loadCard(mint, sig);
+  const data = await loadSkill(mint, sig);
   if (!data) return c.json({ error: "not found" }, 404);
 
-  const proto = c.req.header("X-Forwarded-Proto") || "http";
-  const host = c.req.header("Host") || "localhost:3000";
-  const image = `${proto}://${host}${process.env.BASE_PATH || ""}/skill/${mint}/${sig}.png`;
-
+  const image = `${BROWSER_URL}/skill/${mint}/${sig}.png`;
   const json = {
     name: data.name,
     symbol: data.name.substring(0, 8).toUpperCase(),
     description: data.description,
     image,
-    attributes: [
-      ...(data.category ? [{ trait_type: "category", value: data.category }] : []),
-      ...data.hashtags.map((value) => ({ trait_type: "skill", value })),
-    ],
+    attributes: data.attributes.filter((t) => t.trait_type === "category" || t.trait_type === "skill"),
     inscription: sig, // the on-chain data path (also the last uri segment)
     // Extras beyond the marketplace standard (harmless there), consumed by the
-    // render layer (browser.iqlabs.dev) so the card route needs no chain code.
+    // render layer so the card route needs no chain code.
     creator: data.creator,
     priceLamports: data.priceLamports,
     itemType: data.type,
