@@ -46,7 +46,7 @@ const DISK_TTL: Partial<Record<string, number>> = {
   user: 2 * 60 * 1000,    // 2 minutes — mutable profile/connection data
 };
 
-type CacheType = "meta" | "img" | "rows" | "user" | "render" | "view" | "site" | "site-file" | "signer-index" | "sns" | "ens";
+type CacheType = "meta" | "img" | "rows" | "user" | "render" | "view" | "site" | "site-file" | "signer-index" | "sns" | "ens" | "skillimg";
 
 export async function getDiskCache(
   type: CacheType,
