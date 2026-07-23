@@ -93,7 +93,10 @@ async function loadSkill(mint: string, sig: string): Promise<SkillData | null> {
     creator: itemConfig && itemConfig.data.length >= OFF_PRICE + 8 ? new PublicKey(itemConfig.data.subarray(OFF_CREATOR, OFF_CREATOR + 32)).toBase58() : null,
     priceLamports: itemConfig && itemConfig.data.length >= OFF_PRICE + 8 ? itemConfig.data.readBigUInt64LE(OFF_PRICE).toString() : null,
   };
-  metaCache.set(cacheKey, JSON.stringify(data), 60 * 60 * 1000);
+  // A transient RPC failure on the ItemConfig read comes back as null creator/
+  // price; caching that for the full hour would pin "price -" on the card, so
+  // null-bearing assemblies get a short TTL and heal on the next request.
+  metaCache.set(cacheKey, JSON.stringify(data), data.creator ? 60 * 60 * 1000 : 5 * 60 * 1000);
   return data;
 }
 
