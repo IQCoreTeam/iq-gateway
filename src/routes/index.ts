@@ -9,7 +9,7 @@ export { dataRouter } from "./data";
 export { siteRouter } from "./site";
 export { gateRouter } from "./gate";
 export { snsRouter } from "./sns";
-export { skillRouter } from "./skill";
+export { skillRouter, collectionRouter } from "./skill";
 export { cacheRouter } from "./cache-snapshot";
 export { dbrootsRouter } from "./dbroots";
 export { searchRouter } from "./search";

@@ -22,6 +22,7 @@ export const skillRouter = new Hono();
 // AgentNet matched set (env override for devnet runs). Must match seed.ts.
 const GATE_PROGRAM = new PublicKey(process.env.AGENTNET_GATE_PROGRAM || "8YmcHuCx323RtqC8mzTJ5CH4oVT8mPKJ7xarcPKbdgof");
 const WORKFLOWS_COLLECTION = process.env.AGENTNET_WORKFLOWS_COLLECTION || "6vmWMRWUD34LEjA8eGefegKe5E38WufveMAe2pTm61i8";
+const SKILLS_COLLECTION = process.env.AGENTNET_SKILLS_COLLECTION || "BUGHnCh2Pf93tgcxAEfhjd6tUjbY56JrSZdCRXyt7uS5";
 // The render layer that draws the card image from this route's JSON.
 const BROWSER_URL = (process.env.BROWSER_URL || "https://browser.iqlabs.dev").replace(/\/+$/, "");
 
@@ -133,4 +134,43 @@ skillRouter.get("/:mint/:file", async (c) => {
   const etag = generateETag(jsonStr);
   if (c.req.header("If-None-Match") === etag) return c.body(null, 304);
   return c.json(json, 200, { "Cache-Control": "public, max-age=3600", ETag: etag });
+});
+
+// ── /collection/{mint} — the umbrella groups' off-chain face ──────────────
+// The two collection mints were created WITHOUT a MetadataPointer extension,
+// which Token-2022 only accepts at mint creation: they can never carry
+// on-chain metadata. This JSON (plus the render layer's /collection PNG) is
+// their official face instead — everything here is a constant of the
+// collection type, so it caches long.
+export const collectionRouter = new Hono();
+
+const COLLECTION_META: Record<string, { name: string; description: string }> = {
+  [SKILLS_COLLECTION]: {
+    name: "AgentNet Skills",
+    description:
+      "The AgentNet skills collection. Every member is a soulbound Token-2022 item: a skill an agent can equip, with its full content inscribed on Solana.",
+  },
+  [WORKFLOWS_COLLECTION]: {
+    name: "AgentNet Workflows",
+    description:
+      "The AgentNet workflows collection. Every member is a soulbound Token-2022 bundle of skills with on-chain gates, inscribed on Solana.",
+  },
+};
+
+collectionRouter.get("/:mint", (c) => {
+  const mint = c.req.param("mint").replace(/\.png$/, "");
+  const meta = COLLECTION_META[mint];
+  if (!meta) return c.json({ error: "unknown collection" }, 404);
+  const image = `${BROWSER_URL}/collection/${mint}.png`;
+  const json = {
+    name: meta.name,
+    symbol: "AGENTNET",
+    description: meta.description,
+    image,
+    properties: { files: [{ uri: image, type: "image/png" }], category: "image" },
+  };
+  const jsonStr = JSON.stringify(json);
+  const etag = generateETag(jsonStr);
+  if (c.req.header("If-None-Match") === etag) return c.body(null, 304);
+  return c.json(json, 200, { "Cache-Control": "public, max-age=86400", ETag: etag });
 });

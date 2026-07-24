@@ -316,6 +316,7 @@ async function bootSolana(target: Hono<any>): Promise<void> {
   target.route("/sns", r.snsRouter);
   target.route("/gate", r.gateRouter);
   target.route("/skill", r.skillRouter);
+  target.route("/collection", r.collectionRouter);
   target.route("/dbroots", r.dbrootsRouter);
 
   if (MODE === "solana") {
