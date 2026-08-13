@@ -15,10 +15,12 @@ export const tableRouter = new Hono();
 // Cache entry shape:
 //   `json` is the pre-serialized response body — reused for ETag generation
 //   and HTTP responses without re-stringifying on every hit.
-//   `rows` and `lastTimestamp` are only populated for /rows head-page entries;
-//   they let backgroundRefresh do timestamp-gated incremental updates.
-//   /thread, /rows pagination (`before=...`), and disk-cache migrations leave
-//   them undefined — backgroundRefresh skips those entries.
+//   `rows` is populated for /rows head pages (with `lastTimestamp`, letting
+//   backgroundRefresh do timestamp-gated incremental updates) and for /threads
+//   entries (flat note rows, letting /notify prepend a fresh note and re-group
+//   without a chain fetch). /thread, /rows pagination (`before=...`), and
+//   disk-cache migrations leave them undefined; backgroundRefresh and
+//   /notify skip those entries.
 type Row = Record<string, unknown>;
 interface RowsCacheEntry {
   json: string;
@@ -633,11 +635,31 @@ tableRouter.get("/:tablePda/threads", async (c) => {
   const key = cacheKey("threads", tablePda, String(limit));
 
   async function fetchThreads(): Promise<RowsCacheEntry> {
+    const sigOf = (r: Row) => (r as { __txSignature?: string }).__txSignature;
+    // Snapshot the sigs cached before the RPC round-trips, so rows /notify
+    // injects while they're in flight can be told apart from rows that were
+    // already cached (those the fetched list either re-includes or has paged
+    // out; neither should be re-prepended).
+    const preFetchSigs = new Set((rowsCache.get(key)?.rows ?? []).map(sigOf));
     const signatures = await fetchRecentSignatures(tablePda, limit);
-    const rows = (await resolveRowsFromSignatures(signatures)) as NoteRow[];
+    const fetched = (await resolveRowsFromSignatures(signatures)) as NoteRow[];
+    // Merge, don't clobber: the fetched signature list may be RPC-lagged, so
+    // a row /notify injected during the awaits above won't be in it yet,
+    // and wholesale-replacing the entry would make the just-posted note
+    // vanish while notify's lastRefresh stamp suppresses the corrective
+    // refresh for 30s. Same discipline as backgroundRefresh's merge on the
+    // /rows head page: keep concurrently injected rows, dedupe by sig.
+    const fetchedSigs = new Set(fetched.map(sigOf));
+    const injected = ((rowsCache.get(key)?.rows ?? []) as NoteRow[]).filter((r) => {
+      const sig = sigOf(r);
+      return !fetchedSigs.has(sig) && !preFetchSigs.has(sig);
+    });
+    const rows = [...injected, ...fetched].slice(0, limit);
     const threads = groupThreads(rows);
     const json = JSON.stringify({ tablePda, threads, count: rows.length });
-    const entry: RowsCacheEntry = { json };
+    // Keep the flat rows so /notify can inject a just-posted note and re-group
+    // without waiting for the RPC to index its signature.
+    const entry: RowsCacheEntry = { json, rows };
     rowsCache.set(key, entry, HEAD_TTL);
     console.log(`[threads] ${tablePda.slice(0, 8)} rows=${rows.length} threads=${threads.length}`);
     return entry;
@@ -796,7 +818,14 @@ tableRouter.get("/:tablePda/slice", async (c) => {
 // ─── POST /table/:tablePda/notify ────────────────────────────────────────────
 // Frontend calls this after posting a tx. Gateway fetches that one row,
 // prepends it to the cached rows response so the next /rows request includes
-// it immediately — even before the RPC indexes the new signature.
+// it immediately, even before the RPC indexes the new signature. Cached
+// /threads entries get the same injection (re-grouped, so replies land under
+// their parentId thread), so the compound read stays in sync with /rows.
+
+// /threads cache keys embed the client's limit, which /notify can't know;
+// same trick as the hardcoded /rows limit list below: cover the route default
+// (100), the max (500), and the common small pages.
+const THREADS_NOTIFY_LIMITS = [100, 500, 50, 20, 10, 5];
 
 tableRouter.post("/:tablePda/notify", async (c) => {
   const tablePda = c.req.param("tablePda");
@@ -835,6 +864,11 @@ tableRouter.post("/:tablePda/notify", async (c) => {
       rowsCache.delete(key);
       lastRefresh.delete(key);
     }
+    for (const limit of THREADS_NOTIFY_LIMITS) {
+      const key = cacheKey("threads", tablePda, String(limit));
+      rowsCache.delete(key);
+      lastRefresh.delete(key);
+    }
     console.log(`[notify] ${tablePda.slice(0, 12)}… tx:${txSig.slice(0, 12)}… invalidated (row not available)`);
     return c.json({ ok: true, cached: false });
   }
@@ -865,6 +899,26 @@ tableRouter.post("/:tablePda/notify", async (c) => {
   const now = Date.now();
   for (const limit of [50, 100, 20, 10, 5]) {
     lastRefresh.set(cacheKey(tablePda, String(limit), ""), now);
+  }
+
+  // Same injection for cached /threads entries: prepend the flat row and
+  // re-group, so a new comment (or a reply, which parentId-groups under its
+  // thread) is visible on the compound read before the RPC indexes the sig.
+  // lastRefresh is stamped for the same throttling reason as /rows above.
+  for (const limit of THREADS_NOTIFY_LIMITS) {
+    const key = cacheKey("threads", tablePda, String(limit));
+    lastRefresh.set(key, now);
+    const existing = rowsCache.get(key);
+    if (!existing || !existing.rows) continue;
+    if (existing.rows.some((r) => (r as { __txSignature?: string }).__txSignature === txSig)) continue;
+    existing.rows.unshift(row);
+    existing.rows = existing.rows.slice(0, limit);
+    existing.json = JSON.stringify({
+      tablePda,
+      threads: groupThreads(existing.rows as NoteRow[]),
+      count: existing.rows.length,
+    });
+    rowsCache.set(key, existing, HEAD_TTL);
   }
 
   publishToSubscribers(tablePda, row);
@@ -994,4 +1048,4 @@ tableRouter.get("/cache/stats", (c) => {
   });
 });
 
-export { rowsCache, indexCache, sliceCache, inflight };
+export { rowsCache, indexCache, sliceCache, inflight, lastRefresh };

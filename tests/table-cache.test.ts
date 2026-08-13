@@ -17,6 +17,9 @@ let signatures: string[] = [];
 let rowsBySig = new Map<string, Row>();
 let metaResponses: Array<Meta | Promise<Meta>> = [];
 let signatureFetches: Array<{ limit: number; before?: string }> = [];
+// When set, fetchRecentSignatures blocks until the promise resolves;
+// simulates in-flight RPC latency for background-refresh race tests.
+let signatureGate: Promise<void> | null = null;
 
 const meta = (lastTimestamp: number): Meta => ({
   name: "test",
@@ -35,6 +38,7 @@ mock.module("../src/chain/solana", () => ({
   fetchSignatureIndex: async () => [],
   readRowsBySignatures: async (sigs: string[]) => sigs.map((sig) => rowsBySig.get(sig)).filter(Boolean),
   fetchRecentSignatures: async (_tablePda: string, limit = 50, before?: string) => {
+    if (signatureGate) await signatureGate;
     signatureFetches.push({ limit, before });
     const start = before ? signatures.indexOf(before) + 1 : 0;
     return signatures.slice(start, start + limit);
@@ -56,7 +60,7 @@ mock.module("../src/chain/solana", () => ({
   },
 }));
 
-const { tableRouter, rowsCache, indexCache, sliceCache, inflight } = await import("../src/routes/table");
+const { tableRouter, rowsCache, indexCache, sliceCache, inflight, lastRefresh } = await import("../src/routes/table");
 
 async function waitFor(check: () => boolean): Promise<void> {
   for (let i = 0; i < 20; i++) {
@@ -71,10 +75,12 @@ beforeEach(() => {
   rowsBySig = new Map();
   metaResponses = [];
   signatureFetches = [];
+  signatureGate = null;
   rowsCache.clear();
   indexCache.clear();
   sliceCache.clear();
   inflight.clear();
+  lastRefresh.clear();
 });
 
 describe("/table/:pda/rows cache refresh", () => {
@@ -200,5 +206,141 @@ describe("/table/:pda/rows cache refresh", () => {
     ]);
     expect(entry?.lastTimestamp).toBe(1);
     expect(entry?.rows?.map((r) => r.__txSignature)).toEqual(["sig-new-0", "sig-new-1", "sig-new-2", "sig-new-3"]);
+  });
+});
+
+describe("/table/:pda/threads notify injection", () => {
+  test("notify injects a new top-level note into the cached threads response", async () => {
+    signatures = ["sig-note-a"];
+    rowsBySig = new Map([
+      ["sig-note-a", { __txSignature: "sig-note-a", id: "a", author: "alice", timestamp: 1, body: "first" }],
+    ]);
+
+    const first = await tableRouter.request(`/${TABLE_PDA}/threads`);
+    expect(first.status).toBe(200);
+    expect((await first.json()).threads.map((t: { op: Row }) => t.op.id)).toEqual(["a"]);
+
+    const notified = await tableRouter.request(`/${TABLE_PDA}/notify`, {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({
+        txSignature: "sig-note-b",
+        row: { id: "b", author: "bob", timestamp: 2, body: "second" },
+      }),
+    });
+    expect(notified.status).toBe(200);
+
+    const cached = await tableRouter.request(`/${TABLE_PDA}/threads`);
+    const body = await cached.json();
+
+    expect(body.cached).toBe(true);
+    expect(body.count).toBe(2);
+    expect(body.threads.map((t: { op: Row }) => t.op.id)).toEqual(["b", "a"]);
+    expect(body.threads[0].totalReplies).toBe(0);
+  });
+
+  test("notify groups an injected reply under its parentId thread", async () => {
+    signatures = ["sig-op-a"];
+    rowsBySig = new Map([
+      ["sig-op-a", { __txSignature: "sig-op-a", id: "a", author: "alice", timestamp: 1 }],
+    ]);
+
+    const first = await tableRouter.request(`/${TABLE_PDA}/threads?limit=50`);
+    expect(first.status).toBe(200);
+
+    const notified = await tableRouter.request(`/${TABLE_PDA}/notify`, {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({
+        txSignature: "sig-reply-b",
+        row: { id: "b", author: "bob", timestamp: 2, meta: { parentId: "a" } },
+      }),
+    });
+    expect(notified.status).toBe(200);
+
+    const cached = await tableRouter.request(`/${TABLE_PDA}/threads?limit=50`);
+    const body = await cached.json();
+
+    expect(body.cached).toBe(true);
+    expect(body.count).toBe(2);
+    expect(body.threads).toHaveLength(1);
+    expect(body.threads[0].op.id).toBe("a");
+    expect(body.threads[0].totalReplies).toBe(1);
+    expect(body.threads[0].replies.map((r: Row) => r.id)).toEqual(["b"]);
+    expect(body.threads[0].replies[0].parentAuthor).toBe("alice");
+  });
+
+  test("row-less notify invalidates the cached threads response", async () => {
+    signatures = ["sig-inv-a"];
+    rowsBySig = new Map([
+      ["sig-inv-a", { __txSignature: "sig-inv-a", id: "a", author: "alice", timestamp: 1 }],
+    ]);
+
+    const first = await tableRouter.request(`/${TABLE_PDA}/threads?limit=20`);
+    expect(first.status).toBe(200);
+    expect((await first.json()).cached).toBe(false);
+
+    // Notify with no row payload and an unindexed sig → invalidation branch
+    const notified = await tableRouter.request(`/${TABLE_PDA}/notify`, {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ txSignature: "sig-inv-missing" }),
+    });
+    expect((await notified.json()).cached).toBe(false);
+
+    signatures = ["sig-inv-b", "sig-inv-a"];
+    rowsBySig.set("sig-inv-b", { __txSignature: "sig-inv-b", id: "b", author: "bob", timestamp: 2 });
+
+    const fresh = await tableRouter.request(`/${TABLE_PDA}/threads?limit=20`);
+    const body = await fresh.json();
+
+    expect(body.cached).toBe(false);
+    expect(body.threads.map((t: { op: Row }) => t.op.id)).toEqual(["b", "a"]);
+  });
+
+  test("in-flight background refresh keeps a concurrently notify-injected row", async () => {
+    signatures = ["sig-race-a"];
+    rowsBySig = new Map([
+      ["sig-race-a", { __txSignature: "sig-race-a", id: "a", author: "alice", timestamp: 1 }],
+    ]);
+
+    // Cold fetch populates the cache with [a].
+    const cold = await tableRouter.request(`/${TABLE_PDA}/threads?limit=50`);
+    expect(cold.status).toBe(200);
+
+    // Gate the RPC, then hit the cached entry: shouldRefresh passes and
+    // launches a background fetchThreads that blocks on the gate,
+    // simulating an in-flight refresh started before the notify below.
+    let release!: () => void;
+    signatureGate = new Promise<void>((resolve) => { release = resolve; });
+    const warm = await tableRouter.request(`/${TABLE_PDA}/threads?limit=50`);
+    expect((await warm.json()).cached).toBe(true);
+
+    // /notify lands while that refresh is in flight and injects row b.
+    const notified = await tableRouter.request(`/${TABLE_PDA}/notify`, {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({
+        txSignature: "sig-race-b",
+        row: { id: "b", author: "bob", timestamp: 2 },
+      }),
+    });
+    expect(notified.status).toBe(200);
+
+    const afterNotify = await tableRouter.request(`/${TABLE_PDA}/threads?limit=50`);
+    expect((await afterNotify.json()).threads.map((t: { op: Row }) => t.op.id)).toEqual(["b", "a"]);
+
+    // The in-flight refresh resolves with the RPC-lagged signature list
+    // (still only sig-race-a). It must merge, not wholesale-replace, so
+    // the injected row survives; notify's lastRefresh stamp would otherwise
+    // block the corrective refresh for 30s while the entry serves stale.
+    release();
+    signatureGate = null;
+    await waitFor(() => inflight.size === 0);
+
+    const afterRefresh = await tableRouter.request(`/${TABLE_PDA}/threads?limit=50`);
+    const body = await afterRefresh.json();
+    expect(body.threads.map((t: { op: Row }) => t.op.id)).toEqual(["b", "a"]);
+    expect(body.count).toBe(2);
   });
 });
