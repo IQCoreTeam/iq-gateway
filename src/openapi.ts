@@ -20,7 +20,6 @@ export const openapiSpec = {
   servers: [
     { url: "/", description: "Current gateway host" },
     { url: "https://gateway.iqlabs.dev", description: "Production (iqlabs.dev)" },
-    { url: "https://gateway.iqlabs.dev", description: "Production (iqlabs.dev)" },
     { url: "http://localhost:3000", description: "Local dev" },
   ],
   tags: [
@@ -29,8 +28,10 @@ export const openapiSpec = {
     { name: "users", description: "Per-wallet views — assets, sessions, profile, connections, authored posts" },
     { name: "gate", description: "Token-gate verification for gated tables" },
     { name: "site", description: "Solana-hosted static sites" },
+    { name: "skills", description: "AgentNet skill/workflow items: NFT JSON assembled purely from chain" },
     { name: "dbroots", description: "Cross-dApp discovery — every DbRoot the iqlabs program owns" },
     { name: "cache", description: "Disk-cache snapshot and read-only cache explorer APIs" },
+    { name: "search", description: "Full-text catalog search over indexed on-chain data" },
     { name: "system", description: "Health checks, cache stats, version" },
   ],
   paths: {
@@ -163,6 +164,26 @@ export const openapiSpec = {
             headers: { ETag: { schema: { type: "string" } } },
           },
           304: { description: "Not Modified" },
+        },
+      },
+    },
+    "/table/{tablePda}/threads": {
+      get: {
+        tags: ["tables"],
+        summary: "Whole comment section grouped into threads",
+        description:
+          "AgentNet reviews model: a comment section is ONE table, and a reply is an ordinary row carrying `meta.parentId` = id of the row it answers. Groups the flat rows server-side (2-level render cap: every descendant flattens under its top-level ancestor, keeping `parentAuthor` for an @author ref; orphan parentId → top-level) so clients render instead of each re-deriving the tree. Distinct from `/table/{feedPda}/thread/{threadPda}` above, which is the two-table + `sub` model. An unknown table is an empty section, not a 404.",
+        parameters: [
+          pda,
+          { name: "limit", in: "query", schema: { type: "integer", default: 100, maximum: 500 }, description: "Max rows scanned (newest-first)" },
+        ],
+        responses: {
+          200: {
+            description: "`{ tablePda, threads: [{ op, replies, totalReplies }], count }`",
+            headers: { ETag: { schema: { type: "string" } } },
+          },
+          304: { description: "Not Modified" },
+          400: { description: "Invalid table PDA" },
         },
       },
     },
@@ -332,6 +353,39 @@ export const openapiSpec = {
         responses: { 200: { description: "File content" } },
       },
     },
+    "/skill/{mint}/{file}": {
+      get: {
+        tags: ["skills"],
+        summary: "Standard NFT JSON for an AgentNet skill/workflow mint",
+        description:
+          "The mint uri target: marketplaces, explorers, and wallets fetch it expecting NFT JSON with an image field. Assembled purely from chain, no index or database: name/type from the Token-2022 mint account, description/traits from the code-in inscription, creator/price from the gate program's ItemConfig PDA. `{file}` is the inscription sig; a `.png` suffix 301s to the render layer's card image.",
+        parameters: [
+          { name: "mint", in: "path", required: true, schema: { type: "string" }, description: "Token-2022 mint (base58)" },
+          { name: "file", in: "path", required: true, schema: { type: "string" }, description: "Inscription tx signature, optionally with `.png` suffix" },
+        ],
+        responses: {
+          200: { description: "NFT metadata JSON (1h cache)", headers: { ETag: { schema: { type: "string" } } } },
+          301: { description: "`.png` suffix: redirect to the render layer's card image" },
+          304: { description: "Not Modified" },
+          400: { description: "Malformed mint or signature" },
+          404: { description: "Mint not found or carries no token metadata" },
+        },
+      },
+    },
+    "/collection/{mint}": {
+      get: {
+        tags: ["skills"],
+        summary: "Metadata JSON for the AgentNet umbrella collection mints",
+        description:
+          "The two collection mints were created without a MetadataPointer extension (Token-2022 only accepts one at mint creation), so this JSON is their official face. Everything is a constant of the collection type; cached 24h.",
+        parameters: [{ name: "mint", in: "path", required: true, schema: { type: "string" }, description: "Collection mint (base58); `.png` suffix tolerated" }],
+        responses: {
+          200: { description: "Collection metadata JSON", headers: { ETag: { schema: { type: "string" } } } },
+          304: { description: "Not Modified" },
+          404: { description: "Unknown collection mint" },
+        },
+      },
+    },
     "/dbroots": {
       get: {
         tags: ["dbroots"],
@@ -408,6 +462,61 @@ export const openapiSpec = {
         responses: { 200: { description: "tar.gz stream" } },
       },
     },
+    "/cache/backup": {
+      get: {
+        tags: ["cache"],
+        summary: "Metadata of the snapshot currently in BACKUP_DIR",
+        description: "Read-only, no auth; lets operators inspect what a redeploy would restore. No contents, just `{ exists, path, sizeBytes, modifiedAt }`.",
+        responses: { 200: { description: "Backup file metadata (`exists: false` when none)" } },
+      },
+      post: {
+        tags: ["cache"],
+        summary: "Write a cache snapshot to BACKUP_DIR/latest.tar.gz",
+        description:
+          "Admin-only, using the same Bearer token as /admin/*; 401 when ADMIN_TOKEN is unset (writing to the PV is not a public action). Operators curl this before `docker compose up -d --build` so the snapshot lives in the volume retained across redeploys. Atomic rename, so a crashed backup never leaves a half-written file; one backup at a time.",
+        responses: {
+          200: { description: "`{ path, sizeBytes, writtenAt }`" },
+          401: { description: "Missing/invalid admin token" },
+          409: { description: "Backup already in progress" },
+          500: { description: "Snapshot setup or tar failed" },
+        },
+      },
+    },
+    "/search": {
+      get: {
+        tags: ["search"],
+        summary: "Full-text search over the catalog index",
+        description:
+          "Backed by the FTS5 virtual table in cache.db; the index is populated by catalog ingest (backfill on boot + /notify hook). Query syntax is plain words only, not raw FTS5: the query is whitespace-split and every token is quoted + prefix-starred before matching, so tokens are implicitly ANDed and FTS5 operators (`AND`/`OR`/`NOT`, phrase quotes, parens) are searched as literal text: `foo OR bar` looks for the three literal words, it never unions. Tokens of 3+ chars match via the trigram index (substring semantics, BM25 rank); any token under 3 chars drops the whole query to a LIKE substring scan over the same columns, ordered by label with no rank. Never 4xxs for shape: an empty query returns `hits: []`, so a search UI can call this on every keystroke.",
+        parameters: [
+          { name: "q", in: "query", schema: { type: "string" }, description: "Plain words, whitespace-split and ANDed; operators/quotes match literally; empty → no hits" },
+          { name: "kind", in: "query", schema: { type: "string", enum: ["dbroot", "table", "row"] }, description: "Optional entry-kind filter; other values are ignored" },
+          { name: "network", in: "query", schema: { type: "string" }, description: "Scope to one network; without it search spans every network. Unknown values just yield no hits" },
+          { name: "limit", in: "query", schema: { type: "integer" } },
+        ],
+        responses: { 200: { description: "`{ q, hits, count }` (plus `network` when scoped)" } },
+      },
+    },
+    "/search/stats": {
+      get: {
+        tags: ["search"],
+        summary: "Catalog index counts",
+        responses: { 200: { description: "`{ total, byKind, byNetwork }`" } },
+      },
+    },
+    "/sns/tls-check": {
+      get: {
+        tags: ["site"],
+        summary: "On-demand-TLS gate for *.sol.site hosts",
+        description:
+          "The edge (Caddy `on_demand_tls { ask ... }`) calls this before issuing a per-host Let's Encrypt cert. 200 only when `domain` is a single-label `*.sol.site` host whose `.sol` domain has a host-routing pointer record (SOL record, else TXT), the same source the proxy resolves, so the cert gate stays in lock-step with what actually serves. Anything else, including RPC failure, is 403 (fail closed) so certs never burn the LE rate limit for names that don't point at a site.",
+        parameters: [{ name: "domain", in: "query", required: true, schema: { type: "string" }, description: "Full host, e.g. `name.sol.site`" }],
+        responses: {
+          200: { description: "Allowed: pointer record exists" },
+          403: { description: "Denied: not a sol.site host, no pointer record, or lookup failed" },
+        },
+      },
+    },
     "/sns/{domain}": {
       get: {
         tags: ["site"],
@@ -419,6 +528,38 @@ export const openapiSpec = {
         ],
         responses: {
           200: { description: "`{domain, owner, record}` (owner/record may be null)" },
+        },
+      },
+    },
+    "/sns/{domain}/pointer": {
+      get: {
+        tags: ["site"],
+        summary: "Host-routing pointer for a SNS domain",
+        description:
+          "The target host-routing resolves to: the SOL record (a bare pubkey/PDA) if set, else the TXT record. CNAME and URL are deliberately not consulted. `?fresh=1` skips the cache.",
+        parameters: [
+          { name: "domain", in: "path", required: true, schema: { type: "string" } },
+          { name: "fresh", in: "query", required: false, schema: { type: "string", enum: ["1"] } },
+        ],
+        responses: {
+          200: { description: "`{domain, pointer}` (pointer may be null)" },
+          503: { description: "SNS lookup failed (RPC)" },
+        },
+      },
+    },
+    "/sns/{domain}/url": {
+      get: {
+        tags: ["site"],
+        summary: "Raw URL record for a SNS domain, verbatim",
+        description:
+          "Unlike `/sns/{domain}/record` (302 into /site, sig-shaped values only), this hands the caller the unparsed URL-record string (e.g. `browser.iqlabs.dev/<pda>`) so a client like browser host-routing can interpret any URL shape itself. `?fresh=1` skips the cache.",
+        parameters: [
+          { name: "domain", in: "path", required: true, schema: { type: "string" } },
+          { name: "fresh", in: "query", required: false, schema: { type: "string", enum: ["1"] } },
+        ],
+        responses: {
+          200: { description: "`{domain, url}` (url may be null)" },
+          503: { description: "SNS lookup failed (RPC)" },
         },
       },
     },
