@@ -158,9 +158,15 @@ const COLLECTION_META: Record<string, { name: string; description: string }> = {
 };
 
 collectionRouter.get("/:mint", (c) => {
-  const mint = c.req.param("mint").replace(/\.png$/, "");
+  const raw = c.req.param("mint");
+  const wantsImage = raw.endsWith(".png");
+  const mint = wantsImage ? raw.slice(0, -4) : raw;
   const meta = COLLECTION_META[mint];
   if (!meta) return c.json({ error: "unknown collection" }, 404);
+  // The image lives on the render layer, same contract as /skill/{mint}/{sig}.png:
+  // anything holding a gateway .png URL follows across instead of getting JSON
+  // dressed in an image path.
+  if (wantsImage) return c.redirect(`${BROWSER_URL}/collection/${mint}.png`, 301);
   const image = `${BROWSER_URL}/collection/${mint}.png`;
   const json = {
     name: meta.name,
