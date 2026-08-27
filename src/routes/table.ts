@@ -5,7 +5,7 @@ import { BorshAccountsCoder } from "@coral-xyz/anchor";
 import { createHash } from "node:crypto";
 import iqlabs from "@iqlabs-official/solana-sdk";
 import { fetchSignatureIndex, readRowsBySignatures, fetchRecentSignatures, readMultipleRows, readSingleRow, getTableMetaCached } from "../chain/solana";
-import { MemoryCache, TTL, getDiskCache, setDiskCache, deduped } from "../cache";
+import { MemoryCache, TTL, getDiskCache, setDiskCache, deleteDiskCache, deduped } from "../cache";
 import { ingestRow } from "../cache/catalog-ingest";
 import { invalidateUserAssets } from "./user";
 import { isValidPublicKey } from "../utils";
@@ -274,10 +274,13 @@ async function backgroundRefresh(
   const entry = rowsCache.get(key);
   if (!entry || !entry.rows) return;
 
+  // Feed anchors are signature anchors with no Table account, so meta is null
+  // for them. They still need the catch-up scan: without it a feed head page
+  // that misses /notify stays stale forever (the disk cache re-seeds memory
+  // with the same pre-refresh page on every promote). No meta just means no
+  // cheap timestamp gate, so fall through to the signature overlap scan.
   const meta = await getTableMetaCached(tablePda);
-  if (!meta) return;
-
-  if (meta.lastTimestamp === entry.lastTimestamp) return;
+  if (meta && meta.lastTimestamp === entry.lastTimestamp) return;
 
   const newestSig = entry.rows[0]?.__txSignature as string | undefined;
   const { signatures: newSigs, overlapFound } = await fetchSigsUntilOverlap(tablePda, newestSig ?? null);
@@ -286,7 +289,7 @@ async function backgroundRefresh(
     // Overlap at index 0 means the cache already has the newest indexed sig
     // (common after /notify). No overlap means likely RPC indexing lag, so
     // hold off stamping lastTimestamp and retry on the next refresh.
-    if (overlapFound) {
+    if (overlapFound && meta) {
       entry.lastTimestamp = meta.lastTimestamp;
       rowsCache.set(key, entry, ttl);
     }
@@ -300,7 +303,7 @@ async function backgroundRefresh(
     // Either /notify already prepended these, or we just migrated an entry
     // whose rows already covered current chain state. Only stamp when the
     // indexed sig list actually overlapped the cache.
-    if (overlapFound) {
+    if (overlapFound && meta) {
       entry.lastTimestamp = meta.lastTimestamp;
       rowsCache.set(key, entry, ttl);
     }
@@ -323,7 +326,7 @@ async function backgroundRefresh(
   if (newRows.length === 0) return;
 
   entry.rows = [...newRows, ...entry.rows].slice(0, limit);
-  if (overlapFound) entry.lastTimestamp = meta.lastTimestamp;
+  if (overlapFound && meta) entry.lastTimestamp = meta.lastTimestamp;
   entry.json = JSON.stringify(buildRowsResponse(tablePda, entry.rows, limit, undefined));
   rowsCache.set(key, entry, ttl);
   setDiskCache("rows", key, entry.json).catch(() => {});
@@ -829,7 +832,9 @@ tableRouter.post("/:tablePda/notify", async (c) => {
     : await readSingleRow(txSig).catch(() => null);
 
   if (!row) {
-    // Even if we can't get the row, invalidate cache so next fetch is fresh
+    // Even if we can't get the row, invalidate cache so next fetch is fresh.
+    // Memory only: the disk copy may carry earlier notified rows the RPC has
+    // not indexed yet, and the null-meta refresh path keeps it converging.
     for (const limit of [50, 100, 20, 10, 5]) {
       const key = cacheKey(tablePda, String(limit), "");
       rowsCache.delete(key);
@@ -849,15 +854,49 @@ tableRouter.post("/:tablePda/notify", async (c) => {
   // entry's `rows` array (used by backgroundRefresh) and re-stringifies json
   // for the next HTTP response. lastTimestamp is left alone — the next
   // backgroundRefresh will stamp it when it sees the chain ts matches.
+  const touchedKeys: string[] = [];
   for (const limit of [50, 100, 20, 10, 5]) {
     const key = cacheKey(tablePda, String(limit), "");
-    const existing = rowsCache.get(key);
-    if (!existing || !existing.rows) continue;
-    if (existing.rows.some((r) => (r as { __txSignature?: string }).__txSignature === txSig)) continue;
-    existing.rows.unshift(row);
-    existing.rows = existing.rows.slice(0, limit);
+    let existing = rowsCache.get(key);
+    if (!existing || !existing.rows) {
+      // Nothing in memory to prepend into. Promote the disk copy instead of
+      // dropping it: it may carry earlier notified rows the RPC has not
+      // indexed yet, and this row must join them, not replace them with a
+      // cold fetch that has neither.
+      const disk = await getDiskCache("rows", key);
+      if (!disk) continue;
+      try {
+        const json = disk.toString("utf8");
+        existing = { json, rows: (JSON.parse(json).rows ?? []) as Row[] };
+      } catch {
+        deleteDiskCache("rows", key).catch(() => {});
+        continue;
+      }
+    }
+    const pageRows = existing.rows ?? [];
+    if (pageRows.some((r) => (r as { __txSignature?: string }).__txSignature === txSig)) continue;
+    existing.rows = [row, ...pageRows].slice(0, limit);
     existing.json = JSON.stringify(buildRowsResponse(tablePda, existing.rows, limit, undefined));
     rowsCache.set(key, existing, HEAD_TTL);
+    touchedKeys.push(key);
+  }
+
+  // Write-through: the disk copy is what a restart or eviction promotes, so
+  // it has to carry the prepended row too. But rows disk pages are permanent
+  // and /notify is unauthenticated, so a client-supplied row only persists
+  // once the tx it claims resolves on chain; an unverifiable row stays
+  // memory-only and dies with HEAD_TTL, exactly like before this change.
+  if (touchedKeys.length > 0) {
+    void (async () => {
+      const verified = !rowData || (await readSingleRow(txSig).catch(() => null)) !== null;
+      if (!verified) return;
+      for (const key of touchedKeys) {
+        const entry = rowsCache.get(key);
+        if (entry?.rows?.some((r) => (r as { __txSignature?: string }).__txSignature === txSig)) {
+          setDiskCache("rows", key, entry.json).catch(() => {});
+        }
+      }
+    })();
   }
 
   // Set refresh timestamp to NOW so background refresh doesn't overwrite
