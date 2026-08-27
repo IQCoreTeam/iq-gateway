@@ -1,4 +1,4 @@
-import { mkdir, readFile, writeFile } from "node:fs/promises";
+import { mkdir, readFile, rename, writeFile } from "node:fs/promises";
 import { join } from "node:path";
 import { createHash } from "node:crypto";
 import { recordEntry, getEntry, removeEntry } from "./store";
@@ -67,20 +67,70 @@ export async function getDiskCache(
   return null;
 }
 
+let writeSeq = 0;
+
+// Per-key write serialization. Callers fire-and-forget setDiskCache and
+// deleteDiskCache, so two writers of the same key (a cold fetch and a
+// /notify write-through, for example) can otherwise finish out of call
+// order and leave the older page on disk. Chaining per key makes call
+// order the apply order, for deletes as well as writes.
+const writeTails = new Map<string, Promise<void>>();
+
+async function chainOnKey(sk: string, op: () => Promise<void>): Promise<void> {
+  const tail = (writeTails.get(sk) ?? Promise.resolve()).then(op);
+  writeTails.set(sk, tail);
+  try {
+    await tail;
+  } finally {
+    if (writeTails.get(sk) === tail) writeTails.delete(sk);
+  }
+}
+
+/** Invalidate one disk entry: removeEntry unlinks the blob and drops the
+ *  store row, so the next getDiskCache misses and the caller re-fetches.
+ *  Rides the same per-key chain as writes so a delete cannot be silently
+ *  lost under a still-in-flight write of the same key. */
+export async function deleteDiskCache(
+  type: CacheType,
+  key: string,
+  network: Network = DEFAULT_NETWORK,
+): Promise<void> {
+  const sk = storeKey(network, type, key);
+  await chainOnKey(sk, async () => {
+    try {
+      await removeEntry(sk);
+    } catch {}
+  });
+}
+
+async function writeDiskEntry(
+  type: CacheType,
+  key: string,
+  data: Buffer | string,
+  network: Network,
+): Promise<void> {
+  try {
+    await ensureCacheDir(network, type);
+    const filePath = pathFor(network, type, key);
+    const buf = typeof data === "string" ? Buffer.from(data) : data;
+    // Write-temp-then-rename so a writer can never leave a torn file:
+    // rename is atomic, so readers see the old page or the new one, whole.
+    const tmpPath = `${filePath}.${process.pid}.${writeSeq++}.tmp`;
+    await writeFile(tmpPath, buf);
+    await rename(tmpPath, filePath);
+    await recordEntry(storeKey(network, type, key), type, filePath, buf.length, network);
+  } catch (err) {
+    console.error("Disk cache write error:", err);
+  }
+}
+
 export async function setDiskCache(
   type: CacheType,
   key: string,
   data: Buffer | string,
   network: Network = DEFAULT_NETWORK,
 ): Promise<void> {
-  try {
-    await ensureCacheDir(network, type);
-    const filePath = pathFor(network, type, key);
-    const buf = typeof data === "string" ? Buffer.from(data) : data;
-    await writeFile(filePath, buf);
-    await recordEntry(storeKey(network, type, key), type, filePath, buf.length, network);
-  } catch (err) {
-    console.error("Disk cache write error:", err);
-  }
+  const sk = storeKey(network, type, key);
+  await chainOnKey(sk, () => writeDiskEntry(type, key, data, network));
 }
 
