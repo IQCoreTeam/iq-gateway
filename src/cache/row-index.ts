@@ -150,6 +150,96 @@ export async function listIndexedRows(
   return all.slice(start, start + opts.limit);
 }
 
+// ─── Derived bump feed ───────────────────────────────────────────────────────
+// EVM has no feed PDA, so "which thread was bumped most recently" is not written
+// on chain — it is derived here from the durable index. A thread's activity is
+// the latest block across its OP (written to the board table) and its replies
+// (written to its own table, named "<board>-thread-<uuid>" by the client). This
+// is pure chain-truth: anyone can recompute it from eth_getLogs, no lock-in.
+//
+// v1 limits (noted, not yet applied): sage replies still bump; bump does not
+// freeze past BUMP_LIMIT. Both need per-row payload parsing and can be layered
+// on later without changing this signature.
+
+export interface ThreadFeedEntry {
+  threadName: string;
+  op: Record<string, unknown> | null;
+  replyCount: number;
+  lastActivityTime: number | null;
+  lastBlock: number | null;
+}
+
+/** Cap on board OP rows scanned per feed request (one OP per thread). */
+const FEED_OP_SCAN_CAP = 5000;
+
+function maxNullable(a: number | null, b: number | null): number | null {
+  if (a === null) return b;
+  if (b === null) return a;
+  return Math.max(a, b);
+}
+// null block = a just-posted row not yet stamped with a block; sort it on top.
+const bumpKey = (b: number | null) => (b === null ? Number.MAX_SAFE_INTEGER : b);
+
+export async function listThreadFeed(
+  network: string, dbroot: string, board: string, limit: number,
+): Promise<ThreadFeedEntry[]> {
+  const db = await getDb();
+  prepare(db);
+
+  // 1. Board OPs — one row per thread, carrying the OP payload + threadPda.
+  const opRows = db.query<IndexedRow, [string, string, string, number]>(`
+    SELECT tx_hash, block_number, log_index, block_time, signer, row_json
+    FROM evm_row_index
+    WHERE network = ? AND dbroot = ? AND table_name = ?
+    ${ORDER_SQL} LIMIT ?
+  `).all(network, dbroot, board, FEED_OP_SCAN_CAP);
+
+  const threads = new Map<string, { op: Record<string, unknown>; opBlock: number | null; opTime: number | null }>();
+  for (const r of opRows) {
+    if (!r.row_json) continue;
+    let op: Record<string, unknown>;
+    try { op = JSON.parse(r.row_json); } catch { continue; }
+    const threadName = (op.threadPda ?? op.threadSeed) as string | undefined;
+    if (!threadName || typeof threadName !== "string") continue;
+    const hasSub = !!op.sub;
+    const existing = threads.get(threadName);
+    // One OP per thread; if duplicates appear, prefer the row that looks like
+    // the OP (non-empty sub).
+    if (!existing || (hasSub && !existing.op.sub)) {
+      threads.set(threadName, {
+        op,
+        opBlock: r.block_number ?? null,
+        opTime: r.block_time ?? (typeof op.time === "number" ? op.time : null),
+      });
+    }
+  }
+  if (threads.size === 0) return [];
+
+  // 2. Per-thread activity from the thread tables ("<board>-thread-%").
+  const activity = db.query<{ table_name: string; mb: number | null; mt: number | null; cnt: number }, [string, string, string]>(`
+    SELECT table_name, MAX(block_number) AS mb, MAX(block_time) AS mt, COUNT(*) AS cnt
+    FROM evm_row_index
+    WHERE network = ? AND dbroot = ? AND table_name LIKE ?
+    GROUP BY table_name
+  `).all(network, dbroot, `${board}-thread-%`);
+  const actMap = new Map(activity.map((a) => [a.table_name, a]));
+
+  // 3. Merge + bump sort.
+  const out: ThreadFeedEntry[] = [];
+  for (const [threadName, t] of threads) {
+    const a = actMap.get(threadName);
+    out.push({
+      threadName,
+      op: t.op,
+      replyCount: a?.cnt ?? 0,
+      lastActivityTime: maxNullable(t.opTime, a?.mt ?? null),
+      lastBlock: maxNullable(t.opBlock, a?.mb ?? null),
+    });
+  }
+  out.sort((x, y) => bumpKey(y.lastBlock) - bumpKey(x.lastBlock));
+  return out.slice(0, limit);
+}
+
 export async function countIndexedRows(network: string, dbroot: string, tableName: string): Promise<number> {
   const db = await getDb();
   prepare(db);

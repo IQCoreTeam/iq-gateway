@@ -12,7 +12,7 @@ import { createHash } from "node:crypto";
 import { MemoryCache, TTL, getDiskCache, setDiskCache, deduped } from "../../cache";
 import { ingestRow } from "../../cache/catalog-ingest.evm";
 import {
-  recordRows, listIndexedRows, getIndexState, rowIndexStats,
+  recordRows, listIndexedRows, listThreadFeed, getIndexState, rowIndexStats,
   type IndexedRow, type RowIndexEntry,
 } from "../../cache/row-index";
 import { scheduleTableBackfill } from "../../chain/evm/log-index";
@@ -241,6 +241,34 @@ async function backgroundRefresh(
   recordLiveRows(network, dbRootId, tableName, trulyNew);
   console.log(`[rows:bg] ${network}/${dbRootId}/${tableName} +${trulyNew.length}`);
 }
+
+// ─── /table/:dbRootId/:board/threads — derived bump feed ─────────────────────
+// EVM has no feed PDA, so thread bump order is derived from the durable row
+// index (board OPs + per-thread latest activity), not read from chain. See
+// cache/row-index.ts listThreadFeed. Distinct last segment ("threads") so it
+// never collides with /rows, /index, /thread/:threadName.
+tableRouter.get("/:dbRootId/:board/threads", async (c) => {
+  const dbRootId = c.req.param("dbRootId");
+  const board = c.req.param("board");
+  const chain = c.get("chain");
+  const network = c.get("network");
+  const limit = Math.min(Number(c.req.query("limit")) || 60, 200);
+
+  // Keep the board table (OP rows) converging in the durable index; thread
+  // tables get backfilled when opened. Feed reflects whatever is indexed.
+  scheduleTableBackfill(
+    { network, getProvider: chain.getProvider, config: chain.config },
+    dbRootId, board,
+  );
+
+  try {
+    const threads = await listThreadFeed(network, dbRootId, board, limit);
+    return c.json({ threads, derived: true });
+  } catch (e) {
+    console.error(`[table] thread feed failed for ${dbRootId}/${board}:`, e instanceof Error ? e.message : e);
+    return c.json({ error: "failed to build thread feed" }, 500);
+  }
+});
 
 tableRouter.get("/:dbRootId/:tableName/rows", async (c) => {
   const dbRootId = c.req.param("dbRootId");
