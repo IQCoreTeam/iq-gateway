@@ -164,6 +164,7 @@ const HTML = `<!doctype html>
   <tr><td>sepolia <span class="desc">(EVM default)</span></td><td>chain 11155111 &middot; ETH &middot; <code>0x246A08D9fdD9b3990A88eD1f2DF1A87239839F07</code></td></tr>
   <tr><td>monad</td><td>chain 143 &middot; MON &middot; <code>?network=monad</code> &middot; <code>0x7ae06f87Cf93606DA2BD6A281afB28028cAE233D</code></td></tr>
   <tr><td>monadTestnet</td><td>chain 10143 &middot; MON &middot; <code>?network=monadTestnet</code> &middot; <code>0x3379883538C068978e199472b5D127055c734867</code></td></tr>
+  <tr><td>robinhood</td><td>chain 4663 &middot; ETH &middot; <code>?network=robinhood</code> &middot; <code>0x88af59e58C7E5DcbE7cc12972B90cff3fEEF7223</code></td></tr>
 </table>
 <p>EVM networks deployed depend on this operator's config; check <a href="/health">/health</a> for the live <code>chains</code> list. ENS forward/reverse lookups run against Ethereum mainnet (needs <code>ENS_RPC_ENDPOINT</code>).</p>
 

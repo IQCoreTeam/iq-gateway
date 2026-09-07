@@ -2,13 +2,17 @@
 
 A read-only HTTP cache for IQ Labs on-chain data. Fetches from the blockchain and serves it over HTTP with multi-tier caching. Anyone can run their own gateway.
 
-**One codebase, two chains.** A single `IQ_CHAIN` env var selects the backend:
+**One codebase, every chain.** By default one process serves Solana plus every
+configured EVM network at once, with the chain picked per request. `IQ_CHAIN`
+locks a process to a single chain when you want fault isolation:
 
-- `IQ_CHAIN=solana` (default) — Solana (devnet / mainnet-beta / testnet) via [solana-sdk](https://www.npmjs.com/package/@iqlabs-official/solana-sdk)
-- `IQ_CHAIN=evm` — EVM chains (Sepolia / Monad / Monad Testnet) via [ethereum-sdk](https://www.npmjs.com/package/@iqlabs-official/ethereum-sdk)
+- unset or `multi` (default): Solana + all EVM networks in one process. The
+  resolver picks the chain per request from the id shape (base58 vs `0x`) or an
+  explicit `?network=` query param.
+- `IQ_CHAIN=solana`: Solana only (devnet / mainnet-beta / testnet) via [solana-sdk](https://www.npmjs.com/package/@iqlabs-official/solana-sdk)
+- `IQ_CHAIN=evm`: one EVM network via [ethereum-sdk](https://www.npmjs.com/package/@iqlabs-official/ethereum-sdk)
 
-Cache, RPC queue, ETag/304, SSE, and the server shell are shared. The chain
-adapter, route set, OpenAPI spec, and home page are selected per process. See
+Cache, RPC queue, ETag/304, SSE, and the server shell are shared. See
 [Architecture](#architecture) and [Chains](#chains).
 
 ## Why Run Your Own?
@@ -35,10 +39,20 @@ SOLANA_RPC_ENDPOINT=https://api.mainnet-beta.solana.com
 PORT=3000
 ```
 
-**EVM** (`.env`):
+**Multi-chain** (default; `.env`):
+```
+SOLANA_CLUSTER=mainnet-beta
+SOLANA_RPC_ENDPOINT=https://api.mainnet-beta.solana.com
+# optional per-network EVM RPC overrides; built-in defaults are used otherwise
+# IQETH_RPC_MONAD=...
+# IQETH_RPC_ROBINHOOD=...
+PORT=3000
+```
+
+**Locked EVM** (`.env`):
 ```
 IQ_CHAIN=evm
-IQETH_NETWORK=sepolia                       # sepolia | monad | monadTestnet
+IQETH_NETWORK=sepolia                       # sepolia | monad | monadTestnet | robinhood
 IQETH_RPC_ENDPOINT=https://rpc.sepolia.org
 PORT=3000
 ```
@@ -52,9 +66,18 @@ That's it. Your gateway is live at `http://localhost:3000`.
 
 ## Chains
 
-One process = one chain (fault isolation; matches the Solana cluster model). The
-chain is fixed at boot by `IQ_CHAIN`; the network within it by `SOLANA_CLUSTER`
-(Solana) or `IQETH_NETWORK` (EVM).
+In the default multi mode the chain is resolved per request:
+
+1. `?network=` wins (`solana`, `sepolia`, `monad`, `monadTestnet`, `robinhood`).
+   An unknown value returns 400 with the valid list, never a silent wrong chain.
+2. Otherwise the id shape decides: base58 32/64-byte ids route to Solana,
+   everything else (a `0x` hash/address or an arbitrary dbRootId string) routes
+   to the default EVM network (`IQETH_DEFAULT_NETWORK`, default `sepolia`).
+3. Id-less routes (`/health`, `/dbroots`, `/table/dbroot`, ...) default to
+   Solana unless `?network=` says otherwise.
+
+Setting `IQ_CHAIN` locks a process to one chain instead (fault isolation; the
+network within it comes from `SOLANA_CLUSTER` or `IQETH_NETWORK`).
 
 | | Solana (`IQ_CHAIN=solana`) | EVM (`IQ_CHAIN=evm`) |
 |---|---|---|
@@ -69,11 +92,12 @@ chain is fixed at boot by `IQ_CHAIN`; the network within it by `SOLANA_CLUSTER`
 
 **EVM networks:**
 
-| Network | Chain ID | Contract |
-|---|---|---|
-| sepolia | 11155111 | 0x246A08D9fdD9b3990A88eD1f2DF1A87239839F07 |
-| monad | 143 | 0x7ae06f87Cf93606DA2BD6A281afB28028cAE233D |
-| monadTestnet | 10143 | 0x3379883538C068978e199472b5D127055c734867 |
+| Network | Chain ID | Gas | Contract |
+|---|---|---|---|
+| sepolia | 11155111 | ETH | 0x246A08D9fdD9b3990A88eD1f2DF1A87239839F07 |
+| monad | 143 | MON | 0x7ae06f87Cf93606DA2BD6A281afB28028cAE233D |
+| monadTestnet | 10143 | MON | 0x3379883538C068978e199472b5D127055c734867 |
+| robinhood | 4663 | ETH | 0x88af59e58C7E5DcbE7cc12972B90cff3fEEF7223 |
 
 ## Configuration
 
@@ -97,12 +121,16 @@ chain is fixed at boot by `IQ_CHAIN`; the network within it by `SOLANA_CLUSTER`
 | `HELIUS_API_KEYS` | No | Comma-separated Helius keys for 429 fallback (overrides `HELIUS_API_KEY`) |
 | `BACKFILL_FROM_SLOT` | No | Start slot for historical backfill (requires paid Helius). Set to `398615411` for full IQ Labs history |
 
-**EVM** (`IQ_CHAIN=evm`)
+**EVM**
 
 | Variable | Required | Description |
 |----------|----------|-------------|
-| `IQETH_NETWORK` | Yes | `sepolia`, `monad`, or `monadTestnet` |
-| `IQETH_RPC_ENDPOINT` | Yes | EVM JSON-RPC URL (chain ID validated against the network at boot) |
+| `IQETH_NETWORK` | Locked mode only | `sepolia`, `monad`, `monadTestnet`, or `robinhood` (with `IQ_CHAIN=evm`) |
+| `IQETH_RPC_ENDPOINT` | No | Single EVM JSON-RPC URL (chain ID validated at boot in locked mode) |
+| `IQETH_RPC_<NET>` | No | Per-network RPC override in multi mode, e.g. `IQETH_RPC_MONAD`, `IQETH_RPC_ROBINHOOD`. Falls back to `IQETH_RPC_ENDPOINT`, then the built-in default |
+| `IQETH_DEFAULT_NETWORK` | No | EVM network a bare `0x`/dbRootId request resolves to in multi mode (default `sepolia`) |
+| `IQETH_DEPLOY_BLOCK_<NET>` | No | Contract deploy block per network; lets the row-index log backfill skip pre-deploy history |
+| `IQETH_LOGS_SPAN` | No | Starting block span per `eth_getLogs` chunk for the log backfill (default 50000; halves automatically on RPC range errors) |
 | `ALCHEMY_API_KEY` | No | Enables batched reads + higher rate limits |
 | `ENS_RPC_ENDPOINT` | No | Mainnet RPC for ENS resolution (default `https://eth.llamarpc.com`) |
 | `KNOWN_DBROOTS_FILE` | No | Seed file of dbRootIds for `/dbroots` discovery (default `./config/known-dbroots.json`) |
@@ -138,7 +166,19 @@ active chain.
 | `GET /table/{pda}/subscribe` | **Server-Sent Events stream.** Emits `event: hello` on connect, `event: row` on each `/notify`, `event: ping` every 30s. Clients use `new EventSource(...)` instead of polling. |
 | `GET /table/{feedPda}/thread/{threadPda}` | Resolved `{op, replies, totalReplies}` in one call. Server-side OP picker (prefers row with `sub`, tiebreak earliest time) removes the two-fetch + client-side OP-resolution pattern. |
 | `GET /table/dbroot` | DB root info (tables, creators) |
-| `GET /table/cache/stats` | Cache statistics |
+| `GET /table/cache/stats` | Cache statistics (on EVM includes the durable row-index counters) |
+
+**Durable EVM row index.** EVM has no `getSignaturesForAddress`, so enumerating
+a table normally means a strictly sequential walk of `beforeDataTx` pointers
+(one RPC round-trip per row, redone on cold cache). The gateway keeps a durable
+SQLite index of every row-write tx per `(network, dbroot, table)`, fed by live
+reads, `/notify`, and a background `eth_getLogs(DbCodeInEvent)` backfill that
+scans the contract's indexed topics. Once a table is fully backfilled, deep
+`before` pagination and `/index` are answered from SQLite in one query, and the
+index also lists rows the pointer walk cannot reach (tails orphaned by the
+two-tx `writeRow` race). Unlike the LRU blob cache this index is never pruned.
+Operators can inspect or force a backfill via `GET/POST /admin/evm-index`
+(requires `ADMIN_TOKEN`).
 
 ### Users
 
@@ -226,8 +266,15 @@ Three-tier cache with different TTLs:
 | Chain (Solana / EVM) | Permanent | Source of truth |
 
 The cache layer is chain-agnostic — the same SQLite store, LRU, and dedup serve
-both chains. Run a separate `CACHE_DIR` per (chain × network) instance so base58
-and `0x` keys never collide — give each instance its own persistent volume.
+both chains. In multi mode every cache key, disk path, and SQLite row carries a
+`network` dimension, so one `CACHE_DIR` safely serves all networks in one
+process. If you run several locked single-chain instances instead, give each its
+own `CACHE_DIR` volume.
+
+Two things in `cache.db` are durable and never LRU-pruned: the FTS5 search
+catalog (`catalog_fts`) and the EVM row index (`evm_row_index` +
+`evm_index_state`). Both are derived from chain truth and rebuildable, but
+keeping them beats re-walking transaction chains.
 
 Rows head pages use the table account's `lastTimestamp` as a cheap change
 gate. If the timestamp is unchanged, the gateway can keep serving the cached
@@ -318,9 +365,10 @@ src/chain/
   index.ts     # picks ONE adapter by IQ_CHAIN, re-exports its surface
 src/routes/
   *.ts         # Solana route set
-  evm/         # EVM route set
-src/cache/     # shared store/LRU/dedup; catalog-ingest.evm.ts for EVM row shape
-src/server.ts  # branches on IQ_CHAIN — mounts one route set, validates one network
+  evm/         # EVM route set (per-request wrapper via ctx)
+src/cache/     # shared store/LRU/dedup; catalog + durable EVM row index
+src/resolver.ts # per-request chain/network resolution (multi mode)
+src/server.ts  # boots multi (default) or one locked chain by IQ_CHAIN
 ```
 
 Importing the inactive adapter is side-effect-free (no top-level RPC or env

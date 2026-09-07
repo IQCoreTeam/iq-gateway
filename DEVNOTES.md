@@ -1,5 +1,44 @@
 # iq-gateway devnotes
 
+## 2026-09-07 — Robinhood Chain + durable EVM row index
+
+Groundwork for the iq-chan EVM port (Monad + Robinhood Chain).
+
+### Robinhood Chain (chainId 4663)
+- Added to `src/chain/evm/networks.ts`: contract
+  `0x88af59e58C7E5DcbE7cc12972B90cff3fEEF7223`, default RPC
+  `https://rpc.mainnet.chain.robinhood.com`, ETH gas, Blockscout explorer.
+  Needs `@iqlabs-official/ethereum-sdk@^0.3.0` (bumped) for the `robinhood`
+  setNetwork mode. No testnet contract exists; rehearse on monadTestnet.
+- Reachable in multi mode via `?network=robinhood`, or locked via
+  `IQ_CHAIN=evm` + `IQETH_NETWORK=robinhood`. Boot validates chainId live.
+
+### Multi-mode dispatch fix
+- `extractId()` now treats `/table/dbroot` and `/table/cache/*` as id-less:
+  "dbroot"/"cache" are valid base58 but decode to <32 bytes, so they were
+  misrouted to the EVM sub-app and iq-chan's `GET /table/dbroot` 400-ed in
+  multi mode. They now hit the Solana handler by default; `?network=` still
+  overrides to any EVM network.
+
+### Durable EVM row index (the layer-2 database)
+EVM has no `getSignaturesForAddress`; the SDK's read path is a strictly
+sequential `beforeDataTx` pointer walk, and the two-tx `writeRow` race can
+orphan rows off that chain entirely. New durable SQLite tables
+(`evm_row_index`, `evm_index_state` in cache.db, never LRU-pruned) index every
+row-write tx per (network, dbroot, table):
+- fed by live reads / `/notify` / a background `eth_getLogs(DbCodeInEvent)`
+  backfill (`src/chain/evm/log-index.ts`) using the contract's indexed topics
+  (keccak of dbRootId / tableName). Adaptive chunk spans (halve on RPC range
+  errors), resumable via persisted block ranges, background rpc-queue priority.
+- once a table is `complete`, deep `before` pagination and `/index` are served
+  from SQLite (payloads hydrated lazily via readSingleRow, then persisted);
+  head pages stay on the live path so freshness semantics are unchanged.
+- rows gained `__blockNumber` (alongside `__txHash`/`__signer`/`__blockTime`)
+  so live reads can order the index correctly.
+- ops: `GET/POST /admin/evm-index` (state / force a backfill run);
+  `/table/cache/stats` reports durable index counters. Env:
+  `IQETH_DEPLOY_BLOCK_<NET>`, `IQETH_LOGS_SPAN`.
+
 ## 2026-06-01 — Unified Solana + EVM behind one ChainReader (PR #10)
 
 Merged `iq-eth-gateway` into this repo. One codebase, two chains, selected at

@@ -7,7 +7,7 @@
       "dependencies": {
         "@bonfida/spl-name-service": "^3.0.21",
         "@coral-xyz/anchor": "^0.32.1",
-        "@iqlabs-official/ethereum-sdk": "^0.2.2",
+        "@iqlabs-official/ethereum-sdk": "^0.3.0",
         "@iqlabs-official/solana-sdk": "^0.1.27",
         "@metaplex-foundation/mpl-token-metadata": "^3.4.0",
         "@metaplex-foundation/umi": "^1.4.1",
@@ -43,7 +43,7 @@
 
     "@coral-xyz/borsh": ["@coral-xyz/borsh@0.31.1", "", { "dependencies": { "bn.js": "^5.1.2", "buffer-layout": "^1.2.0" }, "peerDependencies": { "@solana/web3.js": "^1.69.0" } }, "sha512-9N8AU9F0ubriKfNE3g1WF0/4dtlGXoBN/hd1PvbNBamBNwRgHxH4P+o3Zt7rSEloW1HUs6LfZEchlx9fW7POYw=="],
 
-    "@iqlabs-official/ethereum-sdk": ["@iqlabs-official/ethereum-sdk@0.2.2", "", { "dependencies": { "@noble/curves": "^2.0.1", "dotenv": "^17.4.1", "ethers": "^6.16.0" } }, "sha512-c6B6YHuwzoiKBp/JPUT7AAiTjKtzkL9IT7wj0sUSZyi3sOy+9/aDT6FVcA19PeN47WNwUZ8zt1HPEaBiT+sRpA=="],
+    "@iqlabs-official/ethereum-sdk": ["@iqlabs-official/ethereum-sdk@0.3.0", "", { "dependencies": { "@noble/curves": "^2.0.1", "dotenv": "^17.4.1", "ethers": "^6.16.0" } }, "sha512-C2s4Fo3Q5td65q5oUght6JxNWlIquG93pSfhAIbsOWzEs4XenvxyHiAJDMF9Ih5wNspjWq2TqHvONCGmYo8DdQ=="],
 
     "@iqlabs-official/solana-sdk": ["@iqlabs-official/solana-sdk@0.1.27", "", { "dependencies": { "@coral-xyz/anchor": "^0.32.1", "@noble/curves": "^2.0.1", "@noble/hashes": "^1.8.0", "@solana/web3.js": "^1.98.0" } }, "sha512-A+//KL2IQe8aCjGZM6sNOnah4srPWWlh/o13INWkmomyvHP3Oa+IbIPgjzync7RbL4Qi46mNK3xAmNC+bjSCVg=="],
 

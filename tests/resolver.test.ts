@@ -33,6 +33,9 @@ describe("resolveChain — ?network override", () => {
   test("?network=monadTestnet → evm monadTestnet", () => {
     expect(resolveChain(EVM_DBROOT, "monadTestnet")).toEqual({ chain: "evm", network: "monadTestnet" });
   });
+  test("?network=robinhood → evm robinhood", () => {
+    expect(resolveChain(EVM_DBROOT, "robinhood")).toEqual({ chain: "evm", network: "robinhood" });
+  });
   test("?network=sepolia → evm sepolia", () => {
     expect(resolveChain(EVM_TX, "sepolia")).toEqual({ chain: "evm", network: "sepolia" });
   });
@@ -67,4 +70,19 @@ describe("extractId — path → candidate id", () => {
   test("/health → undefined (id-less)", () => expect(extractId("/health")).toBeUndefined());
   test("/dbroots → undefined (id-less)", () => expect(extractId("/dbroots")).toBeUndefined());
   test("/ → undefined", () => expect(extractId("/")).toBeUndefined());
+});
+
+describe("extractId — reserved keyword sub-routes are id-less", () => {
+  // "dbroot" and "cache" are valid base58 but decode to <32 bytes, so without
+  // the reserved list they would misroute to the EVM sub-app in multi mode.
+  test("/table/dbroot → undefined (defaults to solana, ?network overrides)", () =>
+    expect(extractId("/table/dbroot")).toBeUndefined());
+  test("/table/cache/stats → undefined", () =>
+    expect(extractId("/table/cache/stats")).toBeUndefined());
+  test("resolveChain(/table/dbroot id, no param) still lands on solana default", () => {
+    expect(resolveChain(extractId("/table/dbroot"))).toEqual({ chain: "solana", network: "solana" });
+  });
+  test("/table/dbroot?network=monad reaches the EVM handler", () => {
+    expect(resolveChain(extractId("/table/dbroot"), "monad")).toEqual({ chain: "evm", network: "monad" });
+  });
 });

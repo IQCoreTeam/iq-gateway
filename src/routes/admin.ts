@@ -6,6 +6,7 @@
 
 import { Hono } from "hono";
 import { getQueueStats, setQueueConfig } from "../chain/rpc-queue";
+import { isNetworkMode } from "../chain/evm/networks";
 
 const ADMIN_TOKEN = process.env.ADMIN_TOKEN;
 
@@ -49,6 +50,49 @@ adminRouter.post("/queue", async (c) => {
     return c.json({ config: next, applied: update });
   } catch (e) {
     return c.json({ error: e instanceof Error ? e.message : "invalid config" }, 400);
+  }
+});
+
+// ─── Durable EVM row index ops ───────────────────────────────────────────────
+// GET  /admin/evm-index?network=&dbroot=&table=   → backfill state + row count
+// POST /admin/evm-index {network, dbroot, table}  → run a backfill now
+
+function evmIndexParams(network: unknown, dbroot: unknown, table: unknown):
+  { network: string; dbroot: string; table: string } | { error: string } {
+  if (typeof network !== "string" || !isNetworkMode(network)) return { error: "valid network required" };
+  if (typeof dbroot !== "string" || !dbroot) return { error: "dbroot required" };
+  if (typeof table !== "string" || !table) return { error: "table required" };
+  return { network, dbroot, table };
+}
+
+adminRouter.get("/evm-index", async (c) => {
+  const p = evmIndexParams(c.req.query("network"), c.req.query("dbroot"), c.req.query("table"));
+  if ("error" in p) return c.json({ error: p.error }, 400);
+  const { getIndexState, countIndexedRows } = await import("../cache/row-index");
+  const [state, count] = await Promise.all([
+    getIndexState(p.network, p.dbroot, p.table),
+    countIndexedRows(p.network, p.dbroot, p.table),
+  ]);
+  return c.json({ ...p, state, indexedRows: count });
+});
+
+adminRouter.post("/evm-index", async (c) => {
+  let body: Record<string, unknown>;
+  try { body = await c.req.json(); }
+  catch { return c.json({ error: "invalid JSON body" }, 400); }
+  const p = evmIndexParams(body.network, body.dbroot, body.table);
+  if ("error" in p) return c.json({ error: p.error }, 400);
+  const { runTableBackfill } = await import("../chain/evm/log-index");
+  const { buildEvmWrapper } = await import("../chain/wrappers");
+  try {
+    const wrapper = buildEvmWrapper(p.network as Parameters<typeof buildEvmWrapper>[0]);
+    const result = await runTableBackfill(
+      { network: p.network, getProvider: wrapper.getProvider, config: wrapper.config },
+      p.dbroot, p.table,
+    );
+    return c.json({ ...p, ...result });
+  } catch (e) {
+    return c.json({ error: e instanceof Error ? e.message : "backfill failed" }, 500);
   }
 });
 

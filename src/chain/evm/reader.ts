@@ -79,6 +79,7 @@ function formatRow(
   metadata: Record<string, string> | string | null,
   signer?: string,
   blockTime?: number,
+  blockNumber?: number | null,
 ): Row {
   const metaStr = typeof metadata === "string" ? metadata : metadata ? JSON.stringify(metadata) : "";
   let row: Row;
@@ -97,6 +98,7 @@ function formatRow(
   }
   if (signer) row.__signer = signer;
   if (typeof blockTime === "number") row.__blockTime = blockTime;
+  if (typeof blockNumber === "number") row.__blockNumber = blockNumber;
   if (signer) recordSignerSig(signer, txHash);
   return row;
 }
@@ -230,7 +232,7 @@ export function createEvmReader(network: NetworkMode, rpcOverride?: string) {
           const signer = tx?.from;
           const blockNum = tx?.blockNumber;
           const blockTime = blockNum ? (await provider.getBlock(blockNum))?.timestamp : undefined;
-          rows.push(formatRow(e.txHash, e.data, null, signer, blockTime));
+          rows.push(formatRow(e.txHash, e.data, null, signer, blockTime, blockNum));
         }
         return rows;
       });
@@ -244,7 +246,7 @@ export function createEvmReader(network: NetworkMode, rpcOverride?: string) {
         const blockTime = tx.blockNumber ? (await provider.getBlock(tx.blockNumber))?.timestamp : undefined;
         try {
           const codeIn = await iqlabs.reader.readCodeIn(txHash);
-          return formatRow(txHash, codeIn.data, codeIn.metadata, signer, blockTime);
+          return formatRow(txHash, codeIn.data, codeIn.metadata, signer, blockTime, tx.blockNumber);
         } catch (err) {
           const msg = err instanceof Error ? err.message : String(err);
           if (!msg.includes("Unexpected function")) throw err;
@@ -258,7 +260,7 @@ export function createEvmReader(network: NetworkMode, rpcOverride?: string) {
           const onChainPath: string = parsed.args[2] ?? "";
           const metadata: string = parsed.args[3] ?? "";
           if (onChainPath && onChainPath !== "" && onChainPath !== "0x") return null;
-          return formatRow(txHash, metadata, null, signer, blockTime);
+          return formatRow(txHash, metadata, null, signer, blockTime, tx.blockNumber);
         } catch {
           return null;
         }
@@ -295,7 +297,7 @@ export function initEvm(): void {
   if (!isNetworkMode(ENV_NETWORK)) {
     throw new Error(
       `IQETH_NETWORK not set or invalid (got "${ENV_NETWORK}"). ` +
-      `Expected one of: sepolia | monad | monadTestnet`,
+      `Expected one of: ${Object.keys(NETWORKS).join(" | ")}`,
     );
   }
   _default = createEvmReader(ENV_NETWORK, process.env.IQETH_RPC_ENDPOINT);

@@ -11,6 +11,11 @@ import { streamSSE, type SSEStreamingApi } from "hono/streaming";
 import { createHash } from "node:crypto";
 import { MemoryCache, TTL, getDiskCache, setDiskCache, deduped } from "../../cache";
 import { ingestRow } from "../../cache/catalog-ingest.evm";
+import {
+  recordRows, listIndexedRows, getIndexState, rowIndexStats,
+  type IndexedRow, type RowIndexEntry,
+} from "../../cache/row-index";
+import { scheduleTableBackfill } from "../../chain/evm/log-index";
 import { invalidateUserAssets } from "./user";
 import { isTxHash, isEvmAddress } from "../../utils";
 import type { EvmEnv, EvmWrapper } from "../../chain/wrappers";
@@ -100,6 +105,51 @@ function lazyIngestRows(network: string, dbRootId: string, tableName: string, ro
   })();
 }
 
+// ─── Durable row index glue ──────────────────────────────────────────────────
+
+function toIndexEntry(network: string, dbRootId: string, tableName: string, row: Row): RowIndexEntry | null {
+  const r = row as { __txHash?: string; __signer?: string; __blockTime?: number; __blockNumber?: number };
+  if (!r.__txHash) return null;
+  return {
+    network, dbroot: dbRootId, tableName,
+    txHash: r.__txHash,
+    blockNumber: r.__blockNumber ?? null,
+    blockTime: r.__blockTime ?? null,
+    signer: r.__signer ?? null,
+    rowJson: JSON.stringify(row),
+  };
+}
+
+function recordLiveRows(network: string, dbRootId: string, tableName: string, rows: Row[]): void {
+  const entries = rows
+    .map((row) => toIndexEntry(network, dbRootId, tableName, row))
+    .filter((e): e is RowIndexEntry => e !== null);
+  if (entries.length === 0) return;
+  recordRows(entries).catch((e) =>
+    console.warn("[row-index] record failed:", e instanceof Error ? e.message : e));
+}
+
+/** Turn an index page into served rows: parse hydrated payloads, fetch the
+ *  missing ones (parallel; the rpc-queue bounds concurrency), and persist
+ *  what was fetched. "null" marks a tx confirmed non-decodable. */
+async function hydrateIndexedRows(
+  chain: EvmWrapper, network: string, dbRootId: string, tableName: string, page: IndexedRow[],
+): Promise<Row[]> {
+  const out = await Promise.all(page.map(async (e) => {
+    if (e.row_json === "null") return null;
+    if (e.row_json) {
+      try { return JSON.parse(e.row_json) as Row; } catch { return null; }
+    }
+    const row = await chain.readSingleRow(e.tx_hash).catch(() => null);
+    await recordRows([{
+      network, dbroot: dbRootId, tableName, txHash: e.tx_hash,
+      rowJson: row ? JSON.stringify(row) : "null",
+    }]).catch(() => {});
+    return row;
+  }));
+  return out.filter((r): r is Row => r !== null);
+}
+
 async function fetchRowsCold(
   chain: EvmWrapper,
   network: string,
@@ -110,6 +160,24 @@ async function fetchRowsCold(
   before: string | undefined,
   ttl: number,
 ): Promise<RowsCacheEntry> {
+  // Deep pages: once the log backfill has fully enumerated the table, the
+  // durable index answers `before` cursors in O(1) instead of re-walking the
+  // tx-chain past the cursor.
+  if (before) {
+    const state = await getIndexState(network, dbRootId, tableName);
+    if (state?.complete) {
+      const page = await listIndexedRows(network, dbRootId, tableName, { limit, before });
+      const rows = await hydrateIndexedRows(chain, network, dbRootId, tableName, page);
+      const json = JSON.stringify(buildRowsResponse(dbRootId, tableName, rows, limit, before));
+      const entry: RowsCacheEntry = { json };
+      rowsCache.set(key, entry, ttl);
+      if (rows.length > 0) setDiskCache("rows", key, json, network).catch(() => {});
+      console.log(`[rows] ${network}/${dbRootId}/${tableName} rows=${rows.length} (index)`);
+      lazyIngestRows(network, dbRootId, tableName, rows);
+      return entry;
+    }
+  }
+
   // SDK walks the tx-chain. Apply `before` cursor in-memory since the SDK
   // doesn't accept one yet (pull a window, slice past the cursor sig).
   const window = before ? limit * 4 : limit;
@@ -120,6 +188,7 @@ async function fetchRowsCold(
   } else {
     rows = rows.slice(0, limit);
   }
+  recordLiveRows(network, dbRootId, tableName, rows);
 
   const json = JSON.stringify(buildRowsResponse(dbRootId, tableName, rows, limit, before));
   const entry: RowsCacheEntry = before
@@ -169,6 +238,7 @@ async function backgroundRefresh(
   entry.json = JSON.stringify(buildRowsResponse(dbRootId, tableName, entry.rows, limit, undefined));
   rowsCache.set(key, entry, ttl);
   setDiskCache("rows", key, entry.json, network).catch(() => {});
+  recordLiveRows(network, dbRootId, tableName, trulyNew);
   console.log(`[rows:bg] ${network}/${dbRootId}/${tableName} +${trulyNew.length}`);
 }
 
@@ -184,6 +254,13 @@ tableRouter.get("/:dbRootId/:tableName/rows", async (c) => {
   const key = cacheKey(network, dbRootId, tableName, String(limit), before || "");
   const isHead = !before;
   const ttl = isHead ? HEAD_TTL : TTL.ROWS;
+
+  // Keep the durable index converging toward full enumeration for any table
+  // that gets read (throttled + deduped inside; background rpc priority).
+  scheduleTableBackfill(
+    { network, getProvider: chain.getProvider, config: chain.config },
+    dbRootId, tableName,
+  );
 
   if (!fresh) {
     const mem = rowsCache.get(key);
@@ -354,7 +431,19 @@ tableRouter.get("/:dbRootId/:tableName/index", async (c) => {
   const key = cacheKey(network, "index", dbRootId, tableName);
 
   async function fetchIndex(): Promise<string> {
+    // Fully-backfilled tables answer from the durable index (no chain walk);
+    // it also lists rows the pointer walk cannot reach (orphaned tails).
+    const state = await getIndexState(network, dbRootId, tableName);
+    if (state?.complete) {
+      const page = await listIndexedRows(network, dbRootId, tableName, { limit: INDEX_MAX_ROWS });
+      const txHashes = page.map((r) => r.tx_hash);
+      const json = JSON.stringify({ dbRootId, tableName, txHashes, total: txHashes.length });
+      indexCache.set(key, json, INDEX_TTL);
+      setDiskCache("rows", key, json, network).catch(() => {});
+      return json;
+    }
     const rows = await chain.readTableRows(dbRootId, tableName, { limit: INDEX_MAX_ROWS });
+    recordLiveRows(network, dbRootId, tableName, rows);
     const txHashes = rows.map((r) => (r as { __txHash?: string }).__txHash).filter(Boolean);
     const json = JSON.stringify({ dbRootId, tableName, txHashes, total: txHashes.length });
     indexCache.set(key, json, INDEX_TTL);
@@ -430,6 +519,7 @@ tableRouter.get("/:dbRootId/:tableName/slice", async (c) => {
         const rowJson = JSON.stringify(row);
         sliceCache.set(rowKey, rowJson, SLICE_ROW_TTL);
         setDiskCache("meta", rowKey, rowJson, network).catch(() => {});
+        recordLiveRows(network, dbRootId, tableName, [row]);
         rows.push(row);
       } else {
         sliceCache.set(rowKey, "null", SLICE_ROW_TTL);
@@ -507,6 +597,7 @@ tableRouter.post("/:dbRootId/:tableName/notify", async (c) => {
   const rowKey = cacheKey(network, "row", txHash);
   sliceCache.set(rowKey, rowJson, SLICE_ROW_TTL);
   setDiskCache("meta", rowKey, rowJson, network).catch(() => {});
+  recordLiveRows(network, dbRootId, tableName, [row]);
 
   for (const limit of [50, 100, 20, 10, 5]) {
     const key = cacheKey(network, dbRootId, tableName, String(limit), "");
@@ -571,13 +662,15 @@ tableRouter.get("/dbroot", async (c) => {
 
 // ─── Cache stats ─────────────────────────────────────────────────────────────
 
-tableRouter.get("/cache/stats", (c) => {
+tableRouter.get("/cache/stats", async (c) => {
+  const durable = await rowIndexStats().catch(() => null);
   return c.json({
     rows: { entries: rowsCache.size(), ttl: HEAD_TTL },
     index: { entries: indexCache.size(), ttl: INDEX_TTL },
     slice: { entries: sliceCache.size(), ttl: SLICE_ROW_TTL },
     inflight: inflight.size,
     refreshThrottles: lastRefresh.size,
+    rowIndex: durable,
   });
 });
 

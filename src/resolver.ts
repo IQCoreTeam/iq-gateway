@@ -53,14 +53,25 @@ export function resolveChain(id: string | undefined, networkParam?: string): Res
   return { chain: "evm", network: EVM_DEFAULT_NETWORK };
 }
 
+/** Sub-route keywords that sit where an id normally would. `/table/dbroot` and
+ *  `/table/cache/stats` exist on BOTH sub-apps; the keyword is not a chain id,
+ *  so treat these as id-less → default chain, with `?network=` as the override.
+ *  (Without this, "dbroot"/"cache" fail the base58 32/64-byte check and get
+ *  misrouted to the EVM sub-app, 400-ing iq-chan's /table/dbroot call.) */
+const RESERVED_SEGMENTS: Record<string, Set<string>> = {
+  table: new Set(["dbroot", "cache"]),
+};
+
 /** Pull the candidate chain id out of a path. Convention: the segment right
  *  after the route prefix — `/{route}/{id}/...` — with any `.ext` stripped
  *  (/meta/0xabc.json → 0xabc). Returns undefined for id-less routes
- *  (/health, /dbroots, /search, /cache, /docs, ...). */
+ *  (/health, /dbroots, /search, /cache, /docs, ...) and for reserved
+ *  keyword sub-routes (/table/dbroot, /table/cache/...). */
 export function extractId(path: string): string | undefined {
   const parts = path.split("/").filter(Boolean);
   if (parts.length < 2) return undefined;
   const seg = parts[1];
+  if (RESERVED_SEGMENTS[parts[0]]?.has(seg)) return undefined;
   const dot = seg.lastIndexOf(".");
   return dot > 0 ? seg.slice(0, dot) : seg;
 }
