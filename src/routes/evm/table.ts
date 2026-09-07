@@ -393,6 +393,26 @@ function pickOp<T extends { sub?: unknown; time?: unknown; threadSeed?: unknown 
   }, undefined);
 }
 
+/** Read a table's rows from the durable index (payload from row_json), so
+ *  notified/indexed rows are served without a cold chain walk. */
+async function indexedAsRows(
+  network: string, dbRootId: string, tableName: string, limit: number,
+): Promise<Array<Record<string, unknown>>> {
+  const idx = await listIndexedRows(network, dbRootId, tableName, { limit });
+  const out: Array<Record<string, unknown>> = [];
+  for (const r of idx) {
+    if (!r.row_json) continue;
+    try {
+      const row = JSON.parse(r.row_json) as Record<string, unknown>;
+      row.__txHash = r.tx_hash;
+      if (r.signer && !row.__signer) row.__signer = r.signer;
+      if (r.block_time != null && row.__blockTime == null) row.__blockTime = r.block_time;
+      out.push(row);
+    } catch { /* skip undecodable */ }
+  }
+  return out;
+}
+
 tableRouter.get("/:dbRootId/:feedName/thread/:threadName", async (c) => {
   const dbRootId = c.req.param("dbRootId");
   const feedName = c.req.param("feedName");
@@ -405,16 +425,27 @@ tableRouter.get("/:dbRootId/:feedName/thread/:threadName", async (c) => {
   const key = cacheKey(network, "thread", dbRootId, feedName, threadName, String(replyLimit), String(feedScan));
 
   async function fetchThread(): Promise<RowsCacheEntry> {
-    const [feedRows, threadRows] = await Promise.all([
-      chain.readTableRows(dbRootId, feedName, { limit: feedScan }),
-      chain.readTableRows(dbRootId, threadName, { limit: replyLimit }),
-    ]);
+    // Serve from the durable index first (notified/indexed rows, no cold walk);
+    // fall back to a chain walk only if the index has nothing yet.
+    let feedRows = await indexedAsRows(network, dbRootId, feedName, feedScan);
+    let threadRows = await indexedAsRows(network, dbRootId, threadName, replyLimit);
+    if (feedRows.length === 0) {
+      feedRows = (await chain.readTableRows(dbRootId, feedName, { limit: feedScan }).catch(() => [])) as Array<Record<string, unknown>>;
+      if (feedRows.length) recordLiveRows(network, dbRootId, feedName, feedRows as Row[]);
+    }
+    if (threadRows.length === 0) {
+      threadRows = (await chain.readTableRows(dbRootId, threadName, { limit: replyLimit }).catch(() => [])) as Array<Record<string, unknown>>;
+      if (threadRows.length) recordLiveRows(network, dbRootId, threadName, threadRows as Row[]);
+    }
 
-    const feedForThread = feedRows.filter(
-      (r) => (r as { threadName?: string }).threadName === threadName,
-    );
-    const op = pickOp(feedForThread as Array<Record<string, unknown>>)
-      ?? pickOp(threadRows as Array<Record<string, unknown>>)
+    // The OP lives in the feed (board) table. Match this thread by whichever
+    // key the client wrote: threadPda / threadSeed (iq-chan) or threadName.
+    const belongs = (r: Record<string, unknown>) => {
+      const t = (r.threadName ?? r.threadPda ?? r.threadSeed) as string | undefined;
+      return t === threadName;
+    };
+    const op = pickOp(feedRows.filter(belongs))
+      ?? pickOp(threadRows)
       ?? null;
 
     const opTx = (op as { __txHash?: string } | null)?.__txHash;
