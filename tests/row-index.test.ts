@@ -1,9 +1,5 @@
-import { afterAll, describe, expect, test } from "bun:test";
-import { rm } from "node:fs/promises";
-
-// Isolated cache dir for this test file (set before importing the cache layer).
-const TEST_DIR = `/tmp/iq-row-index-test-${process.pid}`;
-process.env.CACHE_DIR = TEST_DIR;
+import "./helpers/cache-fixture";
+import { describe, expect, test } from "bun:test";
 
 const {
   recordRows, listIndexedRows, countIndexedRows,
@@ -12,10 +8,7 @@ const {
 const { initCacheStore } = await import("../src/cache/store");
 
 await initCacheStore();
-
-afterAll(async () => {
-  await rm(TEST_DIR, { recursive: true, force: true }).catch(() => {});
-});
+const initialStats = await rowIndexStats();
 
 const T = { network: "robinhood", dbroot: "iqchan", tableName: "biz" };
 
@@ -66,8 +59,8 @@ describe("evm_row_index — durable row enumeration", () => {
       syncedFromBlock: 0, syncedToBlock: 500, complete: true,
     });
     const stats = await rowIndexStats();
-    expect(stats.rows).toBe(5);
-    expect(stats.tables).toBe(2);
-    expect(stats.backfilledTables).toBe(1);
+    expect(stats.rows - initialStats.rows).toBe(5);
+    expect(stats.tables - initialStats.tables).toBe(2);
+    expect(stats.backfilledTables - initialStats.backfilledTables).toBe(1);
   });
 });

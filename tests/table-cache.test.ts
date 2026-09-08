@@ -1,6 +1,6 @@
 import { beforeEach, describe, expect, mock, test } from "bun:test";
 
-process.env.CACHE_DIR = `/tmp/iq-gateway-table-cache-test-${process.pid}`;
+import "./helpers/cache-fixture";
 
 const TABLE_PDA = "11111111111111111111111111111111";
 

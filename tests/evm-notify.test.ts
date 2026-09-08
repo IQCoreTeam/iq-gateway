@@ -1,10 +1,6 @@
 import { describe, test, expect, mock } from "bun:test";
 import { Hono } from "hono";
-import { mkdtempSync } from "node:fs";
-import { tmpdir } from "node:os";
-import { join } from "node:path";
-
-process.env.CACHE_DIR = mkdtempSync(join(tmpdir(), "iq-notify-test-"));
+import "./helpers/cache-fixture";
 mock.module("../src/chain/evm/log-index", () => ({ scheduleTableBackfill() {} }));
 mock.module("../src/cache/catalog-ingest.evm", () => ({ ingestRow: async () => {} }));
 const { tableRouter } = await import("../src/routes/evm/table");

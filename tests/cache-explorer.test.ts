@@ -3,8 +3,7 @@ import { Database } from "bun:sqlite";
 import { mkdir, symlink, writeFile } from "node:fs/promises";
 import { join } from "node:path";
 
-process.env.CACHE_DIR = `/tmp/iq-gateway-cache-explorer-test-${process.pid}`;
-const CACHE_DIR = process.env.CACHE_DIR;
+import { CACHE_DIR } from "./helpers/cache-fixture";
 
 const { cacheRouter } = await import("../src/routes/cache-snapshot");
 const { metaCache } = await import("../src/cache/memory");
