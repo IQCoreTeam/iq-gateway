@@ -1,6 +1,6 @@
 import { describe, expect, test } from "bun:test";
 
-process.env.CACHE_DIR = `/tmp/iq-gateway-collection-test-${process.pid}`;
+import "./helpers/cache-fixture";
 
 const { collectionRouter } = await import("../src/routes/skill");
 
