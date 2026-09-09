@@ -3,6 +3,11 @@ import { beforeEach, describe, expect, mock, test } from "bun:test";
 import "./helpers/cache-fixture";
 
 const TABLE_PDA = "11111111111111111111111111111111";
+// Disk cache (CACHE_DIR) persists across tests in this file and /rows pages
+// are keyed by (tablePda, limit, before); tests that must cold-fetch use a
+// separate PDA (or a unique limit) so an earlier test's disk page can't be
+// served in place of a fresh fetch.
+const GAP_TABLE_PDA = "So11111111111111111111111111111111111111112";
 
 type Row = Record<string, unknown> & { __txSignature: string };
 type Meta = {
@@ -171,6 +176,100 @@ describe("/table/:pda/rows cache refresh", () => {
       return !!key && rowsCache.get(key)?.lastTimestamp === 2;
     });
     expect(signatureFetches).toEqual([{ limit: 1000, before: undefined }]);
+  });
+
+  test("failed tx mid-history derives nextCursor from the signature scan", async () => {
+    // gap-bad is a failed/undecodable tx: the scan returns its sig but it
+    // decodes to no row. The page comes up one row short of `limit`, yet the
+    // scan wasn't exhausted; the cursor must point at the last sig examined
+    // so paging clients keep walking instead of treating the gap as the end.
+    signatures = ["gap-1", "gap-2", "gap-bad", "gap-4", "gap-5", "gap-6"];
+    rowsBySig = new Map(
+      ["gap-1", "gap-2", "gap-4", "gap-5", "gap-6"].map((sig): [string, Row] => [sig, { __txSignature: sig, value: sig }]),
+    );
+    metaResponses.push(meta(1));
+
+    const first = await tableRouter.request(`/${GAP_TABLE_PDA}/rows?limit=4`);
+    const firstBody = await first.json();
+    expect(first.status).toBe(200);
+    expect(firstBody.rows.map((r: Row) => r.__txSignature)).toEqual(["gap-1", "gap-2", "gap-4"]);
+    expect(firstBody.count).toBe(3);
+    expect(firstBody.nextCursor).toBe("gap-4");
+
+    const second = await tableRouter.request(`/${GAP_TABLE_PDA}/rows?limit=4&before=${firstBody.nextCursor}`);
+    const secondBody = await second.json();
+    expect(secondBody.rows.map((r: Row) => r.__txSignature)).toEqual(["gap-5", "gap-6"]);
+    // Short signature page: the scan really is exhausted this time.
+    expect(secondBody.nextCursor).toBeNull();
+  });
+
+  test("notify on a short head page keeps the scan-derived cursor", async () => {
+    // Two bad sigs leave the head page short of `limit` even after the
+    // notify prepend. Nothing fell off the page, so the cursor from the
+    // original scan must survive the rebuild instead of resetting to null.
+    signatures = ["note-1", "note-bad-a", "note-bad-b", "note-4", "note-5"];
+    rowsBySig = new Map(
+      ["note-1", "note-4", "note-5"].map((sig): [string, Row] => [sig, { __txSignature: sig, value: sig }]),
+    );
+    metaResponses.push(meta(1));
+
+    const first = await tableRouter.request(`/${GAP_TABLE_PDA}/rows?limit=5`);
+    const firstBody = await first.json();
+    expect(firstBody.count).toBe(3);
+    expect(firstBody.nextCursor).toBe("note-5");
+
+    const notified = await tableRouter.request(`/${GAP_TABLE_PDA}/notify`, {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ txSignature: "note-new", row: { value: "new" } }),
+    });
+    expect(notified.status).toBe(200);
+
+    const cached = await tableRouter.request(`/${GAP_TABLE_PDA}/rows?limit=5`);
+    const body = await cached.json();
+    expect(body.cached).toBe(true);
+    expect(body.rows.map((r: Row) => r.__txSignature)).toEqual(["note-new", "note-1", "note-4", "note-5"]);
+    expect(body.nextCursor).toBe("note-5");
+  });
+
+  test("notify refill with a metadata-only bottom row falls back to its tx signature", async () => {
+    // Metadata-only txs decode to { signature, metadata, data: null } with no
+    // __txSignature (formatRow in chain/solana/reader.ts), and the sig-order
+    // sort pins them to the page bottom. When a notify prepend refills the
+    // page to `limit`, the rebuilt cursor must fall back to that row's
+    // `signature` instead of overwriting the scan-derived cursor with null
+    // and silently cutting off all older history.
+    signatures = ["m-1", "m-2", "m-3", "m-4", "m-bad", "m-5", "m-6", "m-7", "m-meta", "m-8"];
+    rowsBySig = new Map([
+      ...["m-1", "m-2", "m-3", "m-4", "m-5", "m-6", "m-7", "m-8"].map((sig): [string, Row] => [sig, { __txSignature: sig, value: sig }]),
+      ["m-meta", { signature: "m-meta", metadata: "0", data: null } as unknown as Row] as [string, Row],
+    ]);
+    metaResponses.push(meta(1));
+
+    const first = await tableRouter.request(`/${GAP_TABLE_PDA}/rows?limit=10`);
+    const firstBody = await first.json();
+    // Full signature page: 10 sigs scanned, m-bad decoded to nothing → 9 rows,
+    // scan-derived cursor points at the last sig examined.
+    expect(first.status).toBe(200);
+    expect(firstBody.count).toBe(9);
+    expect(firstBody.nextCursor).toBe("m-8");
+    expect(firstBody.rows[firstBody.rows.length - 1].signature).toBe("m-meta");
+
+    const notified = await tableRouter.request(`/${GAP_TABLE_PDA}/notify`, {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ txSignature: "m-new", row: { value: "new" } }),
+    });
+    expect(notified.status).toBe(200);
+
+    const cached = await tableRouter.request(`/${GAP_TABLE_PDA}/rows?limit=10`);
+    const body = await cached.json();
+    expect(body.cached).toBe(true);
+    expect(body.count).toBe(10);
+    // The page refilled to limit with the metadata-only row at the bottom:
+    // the cursor is its tx signature, never null on a full page.
+    expect(body.rows[body.rows.length - 1].signature).toBe("m-meta");
+    expect(body.nextCursor).toBe("m-meta");
   });
 
   test("background catch-up stops after the bounded page limit when overlap is missing", async () => {
