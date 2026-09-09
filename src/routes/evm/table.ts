@@ -33,6 +33,22 @@ const rowsCache = new MemoryCache<RowsCacheEntry>(500);
 const indexCache = new MemoryCache<string>(50);
 const sliceCache = new MemoryCache<string>(2000);
 const inflight = new Map<string, Promise<unknown>>();
+const threadReads = new Map<string, object>();
+
+// Compound thread responses depend on both the board OP and thread replies.
+// Keep their in-memory keys addressable so notify invalidates every limit variant.
+function invalidateThreads(network: string, dbRootId: string, tableName: string): void {
+  for (const key of new Set([...rowsCache.keys(), ...threadReads.keys()])) {
+    if (!key.startsWith("thread:")) continue;
+    const [net, root, feed, thread] = JSON.parse(key.slice(7)) as string[];
+    if (net !== network || root !== dbRootId || (feed !== tableName && thread !== tableName)) continue;
+    rowsCache.delete(key);
+    lastRefresh.delete(key);
+    inflight.delete(key);
+    // A read started before notify must not repopulate the cache afterward.
+    threadReads.delete(key);
+  }
+}
 
 // network is the first component of every key, so memory caches (which are
 // process-shared across networks) stay network-isolated.
@@ -422,44 +438,50 @@ tableRouter.get("/:dbRootId/:feedName/thread/:threadName", async (c) => {
   const replyLimit = Math.min(Number(c.req.query("replyLimit")) || 100, 500);
   const feedScan = Math.min(Number(c.req.query("feedScan")) || 100, 500);
 
-  const key = cacheKey(network, "thread", dbRootId, feedName, threadName, String(replyLimit), String(feedScan));
+  const key = `thread:${JSON.stringify([network, dbRootId, feedName, threadName, replyLimit, feedScan])}`;
 
   async function fetchThread(): Promise<RowsCacheEntry> {
-    // Serve from the durable index first (notified/indexed rows, no cold walk);
-    // fall back to a chain walk only if the index has nothing yet.
-    let feedRows = await indexedAsRows(network, dbRootId, feedName, feedScan);
-    let threadRows = await indexedAsRows(network, dbRootId, threadName, replyLimit);
-    if (feedRows.length === 0) {
-      feedRows = (await chain.readTableRows(dbRootId, feedName, { limit: feedScan }).catch(() => [])) as Array<Record<string, unknown>>;
-      if (feedRows.length) recordLiveRows(network, dbRootId, feedName, feedRows as Row[]);
+    const read = {};
+    threadReads.set(key, read);
+    try {
+      // Serve from the durable index first (notified/indexed rows, no cold walk);
+      // fall back to a chain walk only if the index has nothing yet.
+      let feedRows = await indexedAsRows(network, dbRootId, feedName, feedScan);
+      let threadRows = await indexedAsRows(network, dbRootId, threadName, replyLimit);
+      if (feedRows.length === 0) {
+        feedRows = (await chain.readTableRows(dbRootId, feedName, { limit: feedScan }).catch(() => [])) as Array<Record<string, unknown>>;
+        if (feedRows.length) recordLiveRows(network, dbRootId, feedName, feedRows as Row[]);
+      }
+      if (threadRows.length === 0) {
+        threadRows = (await chain.readTableRows(dbRootId, threadName, { limit: replyLimit }).catch(() => [])) as Array<Record<string, unknown>>;
+        if (threadRows.length) recordLiveRows(network, dbRootId, threadName, threadRows as Row[]);
+      }
+
+      // The OP lives in the feed (board) table. Match this thread by whichever
+      // key the client wrote: threadPda / threadSeed (iq-chan) or threadName.
+      const belongs = (r: Record<string, unknown>) => {
+        const t = (r.threadName ?? r.threadPda ?? r.threadSeed) as string | undefined;
+        return t === threadName;
+      };
+      const op = pickOp(feedRows.filter(belongs))
+        ?? pickOp(threadRows)
+        ?? null;
+
+      const opTx = (op as { __txHash?: string } | null)?.__txHash;
+      const replies = threadRows
+        .filter((r) => (r as { __txHash?: string }).__txHash !== opTx)
+        .sort((a, b) => ((a as { time?: number }).time ?? 0) - ((b as { time?: number }).time ?? 0));
+
+      const json = JSON.stringify({
+        dbRootId, feedName, threadName,
+        op, replies, totalReplies: replies.length,
+      });
+      const entry: RowsCacheEntry = { json };
+      if (threadReads.get(key) === read) rowsCache.set(key, entry, HEAD_TTL);
+      return entry;
+    } finally {
+      if (threadReads.get(key) === read) threadReads.delete(key);
     }
-    if (threadRows.length === 0) {
-      threadRows = (await chain.readTableRows(dbRootId, threadName, { limit: replyLimit }).catch(() => [])) as Array<Record<string, unknown>>;
-      if (threadRows.length) recordLiveRows(network, dbRootId, threadName, threadRows as Row[]);
-    }
-
-    // The OP lives in the feed (board) table. Match this thread by whichever
-    // key the client wrote: threadPda / threadSeed (iq-chan) or threadName.
-    const belongs = (r: Record<string, unknown>) => {
-      const t = (r.threadName ?? r.threadPda ?? r.threadSeed) as string | undefined;
-      return t === threadName;
-    };
-    const op = pickOp(feedRows.filter(belongs))
-      ?? pickOp(threadRows)
-      ?? null;
-
-    const opTx = (op as { __txHash?: string } | null)?.__txHash;
-    const replies = threadRows
-      .filter((r) => (r as { __txHash?: string }).__txHash !== opTx)
-      .sort((a, b) => ((a as { time?: number }).time ?? 0) - ((b as { time?: number }).time ?? 0));
-
-    const json = JSON.stringify({
-      dbRootId, feedName, threadName,
-      op, replies, totalReplies: replies.length,
-    });
-    const entry: RowsCacheEntry = { json };
-    rowsCache.set(key, entry, HEAD_TTL);
-    return entry;
   }
 
   const mem = rowsCache.get(key);
@@ -644,6 +666,7 @@ tableRouter.post("/:dbRootId/:tableName/notify", async (c) => {
     : await chain.readSingleRow(txHash).catch(() => null);
 
   if (!row) {
+    invalidateThreads(network, dbRootId, tableName);
     for (const limit of [50, 100, 20, 10, 5]) {
       const key = cacheKey(network, dbRootId, tableName, String(limit), "");
       rowsCache.delete(key);
@@ -656,7 +679,16 @@ tableRouter.post("/:dbRootId/:tableName/notify", async (c) => {
   const rowKey = cacheKey(network, "row", txHash);
   sliceCache.set(rowKey, rowJson, SLICE_ROW_TTL);
   setDiskCache("meta", rowKey, rowJson, network).catch(() => {});
-  recordLiveRows(network, dbRootId, tableName, [row]);
+  // A successful acknowledgement guarantees the next indexed feed/thread read
+  // can see this row. Background persistence races the posting client's refresh.
+  const entry = toIndexEntry(network, dbRootId, tableName, row);
+  try {
+    if (entry) await recordRows([entry]);
+  } catch (e) {
+    console.error("[notify] row-index write failed:", e instanceof Error ? e.message : e);
+    return c.json({ error: "failed to index notified row" }, 503);
+  }
+  invalidateThreads(network, dbRootId, tableName);
 
   for (const limit of [50, 100, 20, 10, 5]) {
     const key = cacheKey(network, dbRootId, tableName, String(limit), "");

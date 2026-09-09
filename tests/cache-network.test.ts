@@ -1,19 +1,11 @@
-import { afterAll, describe, expect, test } from "bun:test";
-import { rm } from "node:fs/promises";
-
-// Isolated cache dir for this test file (set before importing the cache layer).
-const TEST_DIR = `/tmp/iq-cache-network-test-${process.pid}`;
-process.env.CACHE_DIR = TEST_DIR;
+import "./helpers/cache-fixture";
+import { describe, expect, test } from "bun:test";
 
 const { getDiskCache, setDiskCache } = await import("../src/cache/disk");
 const { upsertCatalogEntry, searchCatalog } = await import("../src/cache/catalog");
 const { initCacheStore } = await import("../src/cache/store");
 
 await initCacheStore();
-
-afterAll(async () => {
-  await rm(TEST_DIR, { recursive: true, force: true }).catch(() => {});
-});
 
 describe("disk cache — per-network isolation", () => {
   test("same (type,key) on two EVM networks does NOT collide", async () => {

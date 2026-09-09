@@ -10,7 +10,10 @@ export function deduped<T>(
 ): Promise<T> {
   const existing = inflight.get(key) as Promise<T> | undefined;
   if (existing) return existing;
-  const promise = fn().finally(() => inflight.delete(key));
+  const promise = fn().finally(() => {
+    // An invalidation may have started a newer request for the same key.
+    if (inflight.get(key) === promise) inflight.delete(key);
+  });
   inflight.set(key, promise);
   return promise;
 }
