@@ -1,10 +1,12 @@
 // Read-only catalog search. Backed by the FTS5 virtual table in cache.db;
 // the index is populated by catalog-ingest (backfill on boot + /notify hook).
 //
-// Query syntax is FTS5 native — callers can pass plain words (auto-prefixed
-// as "type as you go") or compound expressions (phrase, AND/OR/NOT). Empty
-// query returns hits=[]; never 4xxs for shape, so the search UI can call
-// this on every keystroke.
+// Query syntax is plain words, not raw FTS5: searchCatalog whitespace-splits
+// the query and quotes + prefix-stars every token, so tokens are implicitly
+// ANDed and FTS5 operators (AND/OR/NOT, phrase quotes) match as literal
+// text. Sub-3-char tokens fall back to a LIKE substring scan. Empty query
+// returns hits=[]; never 4xxs for shape, so the search UI can call this on
+// every keystroke.
 
 import { Hono } from "hono";
 import { searchCatalog, catalogStats, type CatalogEntry } from "../cache/catalog";
