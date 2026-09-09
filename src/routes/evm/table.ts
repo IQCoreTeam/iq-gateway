@@ -23,9 +23,14 @@ import type { EvmEnv, EvmWrapper } from "../../chain/wrappers";
 export const tableRouter = new Hono<EvmEnv>();
 
 type Row = Record<string, unknown>;
+// `rows`, `nextCursor`, and `lastTimestamp` are only populated for /rows
+// head-page entries; they let backgroundRefresh do timestamp-gated incremental
+// updates and let in-place rebuilds (refresh, /notify) keep the walk-derived
+// paging cursor. Pagination (`before=...`) entries leave them undefined.
 interface RowsCacheEntry {
   json: string;
   rows?: Row[];
+  nextCursor?: string | null;
   lastTimestamp?: number;
 }
 
@@ -93,7 +98,20 @@ setInterval(() => {
 const HEAD_TTL = 60_000;
 const SLICE_ROW_TTL = 24 * 60 * 60 * 1000;
 
-function buildRowsResponse(dbRootId: string, tableName: string, rows: Row[], limit: number, before?: string) {
+// Every walked tx yields a row, but only JSON-object data rows carry
+// `__txHash`; failed/undecodable and non-JSON-data rows keep their hash under
+// plain `txHash` (formatRow in chain/evm/reader.ts). Cursor and dedupe logic
+// must resolve through both, never conclude anything from a row's shape.
+function rowTxHash(row: Row): string | undefined {
+  const r = row as { __txHash?: string; txHash?: string };
+  return r.__txHash ?? r.txHash;
+}
+
+// `nextCursor` is derived by the caller from its tx-chain walk position, never
+// from the decoded rows: a failed/undecodable tx at the page bottom has no
+// `__txHash`, so a shape/count-based cursor would report end-of-history there
+// and paging clients would silently skip everything older.
+function buildRowsResponse(dbRootId: string, tableName: string, rows: Row[], limit: number, before: string | undefined, nextCursor: string | null) {
   const pageRows = rows.slice(0, limit);
   return {
     dbRootId,
@@ -102,8 +120,33 @@ function buildRowsResponse(dbRootId: string, tableName: string, rows: Row[], lim
     count: pageRows.length,
     limit,
     before: before || null,
-    nextCursor: pageRows.length === limit ? (pageRows[pageRows.length - 1] as { __txHash?: string })?.__txHash : null,
+    nextCursor,
   };
+}
+
+/** Continuation cursor for a head page rebuilt in place (/notify prepend,
+ *  backgroundRefresh), paths that have no tx-chain walk of their own.
+ *  A full page makes its last visible row the continuation point: everything
+ *  at or above it has been walked. A short page dropped nothing, so the
+ *  cursor from the entry's original walk still holds. Fall through the row's
+ *  plain `txHash`, then the stored cursor; never null a valid walk cursor
+ *  because of a decoded-row shape. */
+function updateHeadCursor(entry: RowsCacheEntry, limit: number): string | null {
+  const rows = entry.rows ?? [];
+  if (rows.length === limit) {
+    entry.nextCursor = rowTxHash(rows[rows.length - 1]) ?? entry.nextCursor ?? null;
+  }
+  return entry.nextCursor ?? null;
+}
+
+/** Rebuild a cache entry from a serialized /rows body (disk promote, stale
+ *  fallback). Head pages keep `rows` and the walk-derived `nextCursor` so
+ *  in-place rebuilds work; lastTimestamp stays undefined and gets stamped on
+ *  the first refresh pass. */
+function entryFromJson(json: string, isHead: boolean): RowsCacheEntry {
+  if (!isHead) return { json };
+  const body = JSON.parse(json) as { rows?: Row[]; nextCursor?: string | null };
+  return { json, rows: body.rows ?? [], nextCursor: body.nextCursor ?? null };
 }
 
 function lazyIngestRows(network: string, dbRootId: string, tableName: string, rows: Row[]): void {
@@ -184,7 +227,11 @@ async function fetchRowsCold(
     if (state?.complete) {
       const page = await listIndexedRows(network, dbRootId, tableName, { limit, before });
       const rows = await hydrateIndexedRows(chain, network, dbRootId, tableName, page);
-      const json = JSON.stringify(buildRowsResponse(dbRootId, tableName, rows, limit, before));
+      // hydrateIndexedRows drops confirmed non-decodable txs, so the cursor
+      // comes from the index page, not the served rows: a full page continues
+      // from its last indexed tx, a short one ends the enumerated history.
+      const nextCursor = page.length === limit ? page[page.length - 1].tx_hash : null;
+      const json = JSON.stringify(buildRowsResponse(dbRootId, tableName, rows, limit, before, nextCursor));
       const entry: RowsCacheEntry = { json };
       rowsCache.set(key, entry, ttl);
       if (rows.length > 0) setDiskCache("rows", key, json, network).catch(() => {});
@@ -195,21 +242,26 @@ async function fetchRowsCold(
   }
 
   // SDK walks the tx-chain. Apply `before` cursor in-memory since the SDK
-  // doesn't accept one yet (pull a window, slice past the cursor sig).
+  // doesn't accept one yet (pull a window, slice past the cursor hash). An
+  // unknown cursor serves the head page.
   const window = before ? limit * 4 : limit;
-  let rows = await chain.readTableRows(dbRootId, tableName, { limit: window });
-  if (before) {
-    const idx = rows.findIndex((r) => (r as { __txHash?: string }).__txHash === before);
-    rows = idx >= 0 ? rows.slice(idx + 1, idx + 1 + limit) : rows.slice(0, limit);
-  } else {
-    rows = rows.slice(0, limit);
-  }
+  const walked = await chain.readTableRows(dbRootId, tableName, { limit: window });
+  const idx = before ? walked.findIndex((r) => rowTxHash(r) === before) : -1;
+  const start = idx >= 0 ? idx + 1 : 0;
+  const rows = walked.slice(start, start + limit);
   recordLiveRows(network, dbRootId, tableName, rows);
 
-  const json = JSON.stringify(buildRowsResponse(dbRootId, tableName, rows, limit, before));
+  // The walk itself knows whether history continues: a full window means the
+  // tx-chain wasn't exhausted, a short one that the page consumed to its end
+  // means it really was. Continue from the last row served (its hash is the
+  // walk position), never from counting decoded rows.
+  const exhausted = walked.length < window && start + rows.length >= walked.length;
+  const nextCursor = rows.length > 0 && !exhausted ? rowTxHash(rows[rows.length - 1]) ?? null : null;
+
+  const json = JSON.stringify(buildRowsResponse(dbRootId, tableName, rows, limit, before, nextCursor));
   const entry: RowsCacheEntry = before
     ? { json }
-    : { json, rows, lastTimestamp: (await chain.getTableMetaCached(dbRootId, tableName))?.lastTimestamp ?? 0 };
+    : { json, rows, nextCursor, lastTimestamp: (await chain.getTableMetaCached(dbRootId, tableName))?.lastTimestamp ?? 0 };
   rowsCache.set(key, entry, ttl);
   if (rows.length > 0) setDiskCache("rows", key, json, network).catch(() => {});
   console.log(`[rows] ${network}/${dbRootId}/${tableName} rows=${rows.length}`);
@@ -242,8 +294,10 @@ async function backgroundRefresh(
     console.warn("[rows:bg] refresh fetch failed:", e instanceof Error ? e.message : e);
     return;
   }
-  const existing = new Set(entry.rows.map((r) => (r as { __txHash?: string }).__txHash));
-  const trulyNew = newRows.filter((r) => !existing.has((r as { __txHash?: string }).__txHash));
+  // Dedupe by rowTxHash, not `__txHash` alone: undecodable rows all have an
+  // undefined `__txHash` and would collide into one Set slot, dropping rows.
+  const existing = new Set(entry.rows.map(rowTxHash));
+  const trulyNew = newRows.filter((r) => !existing.has(rowTxHash(r)));
   if (trulyNew.length === 0) {
     entry.lastTimestamp = meta.lastTimestamp;
     rowsCache.set(key, entry, ttl);
@@ -251,7 +305,7 @@ async function backgroundRefresh(
   }
   entry.rows = [...trulyNew, ...entry.rows].slice(0, limit);
   entry.lastTimestamp = meta.lastTimestamp;
-  entry.json = JSON.stringify(buildRowsResponse(dbRootId, tableName, entry.rows, limit, undefined));
+  entry.json = JSON.stringify(buildRowsResponse(dbRootId, tableName, entry.rows, limit, undefined, updateHeadCursor(entry, limit)));
   rowsCache.set(key, entry, ttl);
   setDiskCache("rows", key, entry.json, network).catch(() => {});
   recordLiveRows(network, dbRootId, tableName, trulyNew);
@@ -320,9 +374,7 @@ tableRouter.get("/:dbRootId/:tableName/rows", async (c) => {
     const disk = await getDiskCache("rows", key, network);
     if (disk) {
       const json = disk.toString("utf8");
-      const entry: RowsCacheEntry = isHead
-        ? { json, rows: (JSON.parse(json).rows ?? []) as Row[] }
-        : { json };
+      const entry = entryFromJson(json, isHead);
       rowsCache.set(key, entry, ttl);
       if (isHead && entry.rows) lazyIngestRows(network, dbRootId, tableName, entry.rows);
       return respondWithEtag(c, { ...JSON.parse(json), cached: true }, etagFor(json));
@@ -342,9 +394,7 @@ tableRouter.get("/:dbRootId/:tableName/rows", async (c) => {
     const stale = await getDiskCache("rows", key, network);
     if (stale) {
       const json = stale.toString("utf8");
-      const entry: RowsCacheEntry = isHead
-        ? { json, rows: (JSON.parse(json).rows ?? []) as Row[] }
-        : { json };
+      const entry = entryFromJson(json, isHead);
       rowsCache.set(key, entry, ttl);
       console.warn(`[table] RPC failed for ${dbRootId}/${tableName}, serving stale`);
       return respondWithEtag(c, { ...JSON.parse(json), cached: true }, etagFor(json));
@@ -694,10 +744,10 @@ tableRouter.post("/:dbRootId/:tableName/notify", async (c) => {
     const key = cacheKey(network, dbRootId, tableName, String(limit), "");
     const existing = rowsCache.get(key);
     if (!existing || !existing.rows) continue;
-    if (existing.rows.some((r) => (r as { __txHash?: string }).__txHash === txHash)) continue;
+    if (existing.rows.some((r) => rowTxHash(r) === txHash)) continue;
     existing.rows.unshift(row);
     existing.rows = existing.rows.slice(0, limit);
-    existing.json = JSON.stringify(buildRowsResponse(dbRootId, tableName, existing.rows, limit, undefined));
+    existing.json = JSON.stringify(buildRowsResponse(dbRootId, tableName, existing.rows, limit, undefined, updateHeadCursor(existing, limit)));
     rowsCache.set(key, existing, HEAD_TTL);
   }
 
