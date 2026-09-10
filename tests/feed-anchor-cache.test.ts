@@ -1,7 +1,7 @@
 import { beforeEach, describe, expect, mock, test } from "bun:test";
 import { Keypair } from "@solana/web3.js";
 
-process.env.CACHE_DIR = `/tmp/iq-gateway-feed-anchor-test-${process.pid}`;
+import "./helpers/cache-fixture";
 
 // Feed anchors are rent-free signature anchors: getSignaturesForAddress works
 // on them but there is no Table account, so getTableMetaCached returns null.
