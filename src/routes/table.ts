@@ -15,16 +15,18 @@ export const tableRouter = new Hono();
 // Cache entry shape:
 //   `json` is the pre-serialized response body — reused for ETag generation
 //   and HTTP responses without re-stringifying on every hit.
-//   `rows` is populated for /rows head pages (with `lastTimestamp`, letting
-//   backgroundRefresh do timestamp-gated incremental updates) and for /threads
-//   entries (flat note rows, letting /notify prepend a fresh note and re-group
-//   without a chain fetch). /thread, /rows pagination (`before=...`), and
-//   disk-cache migrations leave them undefined; backgroundRefresh and
-//   /notify skip those entries.
+//   `rows` is populated for /rows head pages (with `nextCursor` and
+//   `lastTimestamp`, letting backgroundRefresh do timestamp-gated incremental
+//   updates and letting in-place rebuilds (refresh, /notify) keep the
+//   scan-derived paging cursor) and for /threads entries (flat note rows,
+//   letting /notify prepend a fresh note and re-group without a chain fetch).
+//   /thread, /rows pagination (`before=...`), and disk-cache migrations leave
+//   them undefined; backgroundRefresh and /notify skip those entries.
 type Row = Record<string, unknown>;
 interface RowsCacheEntry {
   json: string;
   rows?: Row[];
+  nextCursor?: string | null;
   lastTimestamp?: number;
 }
 
@@ -131,7 +133,12 @@ async function fetchSigsUntilOverlap(
   return { signatures: collected, overlapFound: false };
 }
 
-function buildRowsResponse(tablePda: string, rows: Record<string, unknown>[], limit: number, before?: string) {
+// `nextCursor` is derived by the caller from its signature scan, never from
+// counting decoded rows: failed txs and non-row sigs (table creation, rejected
+// decodes) drop out of `rows`, so a count-based cursor would report
+// end-of-history on any page with a bad sig and paging clients would silently
+// skip everything older.
+function buildRowsResponse(tablePda: string, rows: Record<string, unknown>[], limit: number, before: string | undefined, nextCursor: string | null) {
   const pageRows = rows.slice(0, limit);
   return {
     tablePda,
@@ -139,8 +146,38 @@ function buildRowsResponse(tablePda: string, rows: Record<string, unknown>[], li
     count: pageRows.length,
     limit,
     before: before || null,
-    nextCursor: pageRows.length === limit ? (pageRows[pageRows.length - 1] as { __txSignature?: string })?.__txSignature : null,
+    nextCursor,
   };
+}
+
+/** Continuation cursor for a head page rebuilt in place (/notify prepend,
+ *  backgroundRefresh), paths that have no signature scan of their own.
+ *  A full page makes its last visible row the continuation point: everything
+ *  at or above it has been scanned. A short page dropped nothing, so the
+ *  cursor from the entry's original scan still holds.
+ *
+ *  Metadata-only and non-JSON-data rows carry their tx sig under `signature`,
+ *  not `__txSignature` (formatRow in chain/solana/reader.ts), and the
+ *  sig-order sort pins them to the page bottom, so fall back through
+ *  `signature`, then the stored cursor, before concluding end-of-history.
+ *  Never null a valid scan cursor because of a decoded-row shape. */
+function updateHeadCursor(entry: RowsCacheEntry, limit: number): string | null {
+  const rows = entry.rows ?? [];
+  if (rows.length === limit) {
+    const last = rows[rows.length - 1] as { __txSignature?: string; signature?: string };
+    entry.nextCursor = last.__txSignature ?? last.signature ?? entry.nextCursor ?? null;
+  }
+  return entry.nextCursor ?? null;
+}
+
+/** Rebuild a cache entry from a serialized /rows body (disk promote, stale
+ *  fallback). Head pages keep `rows` and the scan-derived `nextCursor` so
+ *  in-place rebuilds work; lastTimestamp stays undefined and gets stamped on
+ *  the first refresh pass. */
+function entryFromJson(json: string, isHead: boolean): RowsCacheEntry {
+  if (!isHead) return { json };
+  const body = JSON.parse(json) as { rows?: Row[]; nextCursor?: string | null };
+  return { json, rows: body.rows ?? [], nextCursor: body.nextCursor ?? null };
 }
 
 const HEAD_TTL = 60_000; // 60s memory TTL for head page
@@ -232,12 +269,15 @@ async function fetchRowsCold(
 ): Promise<RowsCacheEntry> {
   const signatures = await fetchRecentSignatures(tablePda, limit, before);
   const rows = await resolveRowsFromSignatures(signatures);
-  const json = JSON.stringify(buildRowsResponse(tablePda, rows, limit, before));
-  // Only head-page entries carry rows/lastTimestamp — paginated requests are
-  // immutable and don't need background refresh.
+  // A full signature page means the scan wasn't exhausted; continue from the
+  // last sig examined, even when some of its txs decoded to no row.
+  const nextCursor = signatures.length === limit ? signatures[signatures.length - 1] : null;
+  const json = JSON.stringify(buildRowsResponse(tablePda, rows, limit, before, nextCursor));
+  // Only head-page entries carry rows/nextCursor/lastTimestamp; paginated
+  // requests are immutable and don't need background refresh.
   const entry: RowsCacheEntry = before
     ? { json }
-    : { json, rows, lastTimestamp: await fetchLastTimestamp(tablePda) };
+    : { json, rows, nextCursor, lastTimestamp: await fetchLastTimestamp(tablePda) };
   rowsCache.set(key, entry, ttl);
   if (rows.length > 0) setDiskCache("rows", key, json).catch(() => {});
   console.log(`[rows] ${tablePda.slice(0,8)} sigs=${signatures.length} rows=${rows.length}`);
@@ -329,7 +369,7 @@ async function backgroundRefresh(
 
   entry.rows = [...newRows, ...entry.rows].slice(0, limit);
   if (overlapFound && meta) entry.lastTimestamp = meta.lastTimestamp;
-  entry.json = JSON.stringify(buildRowsResponse(tablePda, entry.rows, limit, undefined));
+  entry.json = JSON.stringify(buildRowsResponse(tablePda, entry.rows, limit, undefined, updateHeadCursor(entry, limit)));
   rowsCache.set(key, entry, ttl);
   setDiskCache("rows", key, entry.json).catch(() => {});
   console.log(`[rows:bg] ${tablePda.slice(0,8)} +${newRows.length} rows`);
@@ -361,15 +401,10 @@ tableRouter.get("/:tablePda/rows", async (c) => {
     }
 
     // Disk cache hit — promote to memory, then serve.
-    // For head pages we keep `rows` from the JSON body so the next background
-    // refresh can do incremental updates; lastTimestamp stays undefined and
-    // gets stamped on the first refresh pass.
     const disk = await getDiskCache("rows", key);
     if (disk) {
       const json = disk.toString("utf8");
-      const entry: RowsCacheEntry = isHead
-        ? { json, rows: (JSON.parse(json).rows ?? []) as Row[] }
-        : { json };
+      const entry = entryFromJson(json, isHead);
       rowsCache.set(key, entry, ttl);
       // Lazy ingest on disk promote: the FTS5 index lives in a separate
       // table that disk-cache promotion alone doesn't touch.
@@ -390,9 +425,7 @@ tableRouter.get("/:tablePda/rows", async (c) => {
     const stale = await getDiskCache("rows", key);
     if (stale) {
       const json = stale.toString("utf8");
-      const entry: RowsCacheEntry = isHead
-        ? { json, rows: (JSON.parse(json).rows ?? []) as Row[] }
-        : { json };
+      const entry = entryFromJson(json, isHead);
       rowsCache.set(key, entry, ttl);
       console.warn(`[table] RPC failed for ${tablePda}, serving stale cache`);
       return respondWithEtag(c, { ...JSON.parse(json), cached: true }, etagFor(json));
@@ -900,8 +933,7 @@ tableRouter.post("/:tablePda/notify", async (c) => {
       const disk = await getDiskCache("rows", key);
       if (!disk) continue;
       try {
-        const json = disk.toString("utf8");
-        existing = { json, rows: (JSON.parse(json).rows ?? []) as Row[] };
+        existing = entryFromJson(disk.toString("utf8"), true);
       } catch {
         deleteDiskCache("rows", key).catch(() => {});
         continue;
@@ -910,7 +942,7 @@ tableRouter.post("/:tablePda/notify", async (c) => {
     const pageRows = existing.rows ?? [];
     if (pageRows.some((r) => (r as { __txSignature?: string }).__txSignature === txSig)) continue;
     existing.rows = [row, ...pageRows].slice(0, limit);
-    existing.json = JSON.stringify(buildRowsResponse(tablePda, existing.rows, limit, undefined));
+    existing.json = JSON.stringify(buildRowsResponse(tablePda, existing.rows, limit, undefined, updateHeadCursor(existing, limit)));
     rowsCache.set(key, existing, HEAD_TTL);
     touchedKeys.push(key);
   }
