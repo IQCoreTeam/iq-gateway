@@ -120,7 +120,7 @@ export function detectImageType(buf: Buffer): string | null {
 
 export async function readAsset(txSig: string) {
   const tx = await withRetry(() =>
-    solConnection.getTransaction(txSig, { maxSupportedTransactionVersion: 0 }),
+    solConnection.getTransaction(txSig, { maxSupportedTransactionVersion: 1 }),
   );
   if (!tx) throw new Error("transaction not found");
 
@@ -233,7 +233,7 @@ export async function readSingleRow(
       const needTx = !preloaded || preloaded.signer === undefined || preloaded.blockTime === undefined;
       const [codeIn, tx] = await Promise.all([
         iqlabs.reader.readCodeIn(sig),
-        needTx ? solConnection.getTransaction(sig, { maxSupportedTransactionVersion: 0 }) : Promise.resolve(null),
+        needTx ? solConnection.getTransaction(sig, { maxSupportedTransactionVersion: 1 }) : Promise.resolve(null),
       ]);
       const signer = preloaded?.signer ?? tx?.transaction.message.getAccountKeys().get(0)?.toBase58();
       const blockTime = preloaded?.blockTime ?? (tx?.blockTime ?? undefined);

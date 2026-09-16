@@ -108,7 +108,7 @@ export async function heliusBatchGetTransactions(
     jsonrpc: "2.0" as const,
     id: i,
     method: "getTransaction",
-    params: [sig, { maxSupportedTransactionVersion: 0, encoding: "json" }],
+    params: [sig, { maxSupportedTransactionVersion: 1, encoding: "json" }],
   }));
 
   const responses = await rpc(batch, priority) as Array<{ id: number; result?: VersionedTransactionResponse | null; error?: unknown }>;
