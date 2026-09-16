@@ -1,4 +1,4 @@
-# Inscription branding verification
+# Inscription branding and responsive layout verification
 
 2026-09-16, based on upstream `4a70e41`.
 
@@ -24,7 +24,23 @@ Local full gateway after, same inscription read from mainnet:
 ![Both logos loaded](view-after.png)
 
 Both HTML images report `complete=true` and nonzero natural dimensions.
-The narrow viewer's existing ASCII wrapping is unchanged by this logo fix.
+Multiline ASCII art and indented content preserve whitespace in both Solana and
+EVM HTML templates. Ordinary prose still wraps. The footer now contains its
+text and a 24px-high logo.
+
+Chrome viewport emulation, not physical device testing:
+
+![390px mobile](view-390.png)
+
+![320px narrow mobile](view-320.png)
+
+![1024px desktop](view-1024.png)
+
+At 390px the frog fits. At 320px the content region scrolls horizontally
+without widening the page. DOM measurements confirmed preformatted whitespace,
+no page overflow, and contained footer text/logo at 320, 390, and 1024px.
+A separate keyboard-scroll interaction timed out in browser control and is not
+claimed as verified.
 
 Actual `/render` PNG:
 
@@ -33,7 +49,8 @@ Actual `/render` PNG:
 ## Validation
 
 - `bun install --frozen-lockfile`
-- `bun test`: 116 pass, 0 fail (includes 2 branding regressions).
+- `bun test`: 117 pass, 0 fail (includes 2 branding regressions and a shared
+  Solana/EVM layout regression with Korean text).
 - Tests rasterize the SVG with resvg and verify that both logo regions change
   pixels compared with an otherwise identical image with the logos removed.
 - `bun run build`: passed.

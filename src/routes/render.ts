@@ -184,7 +184,7 @@ export function generateSvg(text: string, sig: string): string {
   <text x="${WIDTH - BORDER - 234}" y="${HEIGHT - BORDER - 11}" font-family="DejaVu Sans Mono, monospace" font-size="12" font-weight="bold" fill="${IQ_GREEN_DARK}">ON-CHAIN</text>
 
   <!-- Right — Solana Internet logo -->
-  <image href="${SOLANA_INTERNET_LOGO}" x="${WIDTH - BORDER - 138}" y="${HEIGHT - BORDER - FOOTER_H - 20}" width="136" height="72"/>
+  <image href="${SOLANA_INTERNET_LOGO}" x="${WIDTH - BORDER - 138}" y="${HEIGHT - BORDER - FOOTER_H + 4}" width="136" height="24"/>
 </svg>`;
 }
 

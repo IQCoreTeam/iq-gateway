@@ -7,4 +7,4 @@ export const IQ_LOGO = `data:image/svg+xml;base64,${readFileSync(new URL("../pub
 export const SOLANA_INTERNET_LOGO = `data:image/png;base64,${readFileSync(new URL("../public/solana-internet.png", import.meta.url)).toString("base64")}`;
 
 // Rendered previews depend on our template, unlike immutable on-chain bytes.
-export const RENDER_REVISION = "branding-1";
+export const RENDER_REVISION = "branding-2";

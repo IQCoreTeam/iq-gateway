@@ -39,3 +39,17 @@ describe("inscription branding", () => {
     expect(withLogos.asPng().subarray(1, 4).toString()).toBe("PNG");
   });
 });
+
+describe("inscription layout", () => {
+  test("keeps ASCII indentation and lines intact while prose can wrap", async () => {
+    const { renderHtmlPage: renderEvm } = await import("../src/routes/evm/view");
+    for (const render of [renderHtmlPage, renderEvm]) {
+      const art = "    .-@@@@-.\n    |  안녕 |\n    '------'";
+      const html = render(art, sig, "https://gateway.iqlabs.dev");
+      expect(html).toContain(' preformatted" tabindex="0"');
+      expect(html).toContain("    .-@@@@-.\n    |  안녕 |");
+      const prose = render("Hello friend.\nThis is normal prose.", sig, "https://gateway.iqlabs.dev");
+      expect(prose).not.toContain(' preformatted" tabindex="0"');
+    }
+  });
+});
