@@ -17,21 +17,25 @@ metaRouter.get("/:sig", async (c) => {
   if (sig.endsWith(".json")) sig = sig.slice(0, -5);
   if (!sig || sig.length < 80) return c.json({ error: "invalid signature" }, 400);
 
+  const fresh = c.req.query("fresh") === "1";
   const cacheKey = `meta:${sig}`;
   let raw: RawMeta | null = null;
 
-  // Check memory cache
-  const cached = metaCache.get(cacheKey);
-  if (cached) {
-    raw = JSON.parse(cached);
-  }
+  // `?fresh=1` skips both caches and recomputes, overwriting the stored entry.
+  if (!fresh) {
+    // Check memory cache
+    const cached = metaCache.get(cacheKey);
+    if (cached) {
+      raw = JSON.parse(cached);
+    }
 
-  // Check disk cache
-  if (!raw) {
-    const disk = await getDiskCache("meta", sig);
-    if (disk) {
-      raw = JSON.parse(disk.toString("utf8"));
-      metaCache.set(cacheKey, disk.toString("utf8"), TTL.META_IMMUTABLE);
+    // Check disk cache
+    if (!raw) {
+      const disk = await getDiskCache("meta", sig);
+      if (disk) {
+        raw = JSON.parse(disk.toString("utf8"));
+        metaCache.set(cacheKey, disk.toString("utf8"), TTL.META_IMMUTABLE);
+      }
     }
   }
 

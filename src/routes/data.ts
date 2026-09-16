@@ -11,20 +11,26 @@ dataRouter.get("/:sig", async (c) => {
   const sig = c.req.param("sig");
   if (!sig || sig.length < 80) return c.json({ error: "invalid signature" }, 400);
 
+  const fresh = c.req.query("fresh") === "1";
   const cacheKey = `data:${sig}`;
 
-  // L1: Memory cache
-  const cached = dataCache.get(cacheKey);
-  if (cached) {
-    return c.json(JSON.parse(cached));
-  }
+  // `?fresh=1` skips both caches and recomputes, overwriting the stored entry.
+  // Lets a stale immutable entry (e.g. a transient null cached during an RPC
+  // outage) be healed without a redeploy.
+  if (!fresh) {
+    // L1: Memory cache
+    const cached = dataCache.get(cacheKey);
+    if (cached) {
+      return c.json(JSON.parse(cached));
+    }
 
-  // L2: Disk cache (keyed with "data:" prefix to avoid collision with /meta cache)
-  const disk = await getDiskCache("meta", cacheKey);
-  if (disk) {
-    const text = new TextDecoder().decode(disk);
-    dataCache.set(cacheKey, text, TTL.META_IMMUTABLE);
-    return c.json(JSON.parse(text));
+    // L2: Disk cache (keyed with "data:" prefix to avoid collision with /meta cache)
+    const disk = await getDiskCache("meta", cacheKey);
+    if (disk) {
+      const text = new TextDecoder().decode(disk);
+      dataCache.set(cacheKey, text, TTL.META_IMMUTABLE);
+      return c.json(JSON.parse(text));
+    }
   }
 
   // L3: Fetch from chain (deduplicated)
