@@ -1,3 +1,4 @@
+import { IQ_LOGO, SOLANA_INTERNET_LOGO, RENDER_REVISION } from "../branding";
 import { Hono } from "hono";
 import { readAsset, generateETag, decodeAssetData, detectImageType } from "../chain/solana";
 import { imageCache, TTL, getDiskCache, setDiskCache } from "../cache";
@@ -5,7 +6,7 @@ import { escapeMarkup } from "./render";
 
 export const viewRouter = new Hono();
 
-function renderHtmlPage(text: string, sig: string, baseUrl: string): string {
+export function renderHtmlPage(text: string, sig: string, baseUrl: string): string {
   const shortSig = sig.slice(0, 8) + "..." + sig.slice(-8);
 
   let displayContent: string;
@@ -26,7 +27,7 @@ function renderHtmlPage(text: string, sig: string, baseUrl: string): string {
 <title>IQLabs — ${escapeMarkup(shortSig)}</title>
 <meta property="og:title" content="IQLabs Inscription"/>
 <meta property="og:description" content="${escapeMarkup(text.slice(0, 200))}"/>
-<meta property="og:image" content="${baseUrl}/render/${sig}"/>
+<meta property="og:image" content="${baseUrl}/render/${sig}?v=${RENDER_REVISION}"/>
 <style>
 * { margin:0; padding:0; box-sizing:border-box; }
 
@@ -285,7 +286,7 @@ body::after {
 <div class="window">
   <div class="title-bar">
     <span class="title">
-      <img class="title-logo" src="/iq_logo.svg" alt=""/>
+      <img class="title-logo" src="${IQ_LOGO}" alt=""/>
       IQLabs — ${escapeMarkup(shortSig)}
     </span>
     <div class="title-buttons">
@@ -298,7 +299,7 @@ body::after {
   <div class="status-bar">
     <div class="status-panel">inscribed on solana via iqlabs</div>
     <div class="status-panel right"><span class="status-dot"></span> ON-CHAIN</div>
-    <div class="status-panel sol-panel"><img class="status-sol-internet" src="/solana-internet.png" alt="Solana Internet"/></div>
+    <div class="status-panel sol-panel"><img class="status-sol-internet" src="${SOLANA_INTERNET_LOGO}" alt="Solana Internet"/></div>
   </div>
 </div>
 
@@ -360,7 +361,7 @@ viewRouter.get("/:sig", async (c) => {
   if (c.req.header("If-None-Match") === etag) return c.body(null, 304);
 
   return c.html(html, 200, {
-    "Cache-Control": "public, max-age=31536000, immutable",
+    "Cache-Control": "public, max-age=300, must-revalidate",
     ETag: etag,
   });
 });

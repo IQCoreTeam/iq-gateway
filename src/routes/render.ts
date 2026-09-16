@@ -1,3 +1,4 @@
+import { IQ_LOGO, SOLANA_INTERNET_LOGO, RENDER_REVISION } from "../branding";
 import { Hono } from "hono";
 import { readAsset, generateETag, decodeAssetData, detectImageType } from "../chain/solana";
 import { imageCache, TTL, getDiskCache, setDiskCache } from "../cache";
@@ -67,7 +68,7 @@ function formatLines(text: string, maxChars: number): string[] {
   return lines;
 }
 
-function generateSvg(text: string, sig: string): string {
+export function generateSvg(text: string, sig: string): string {
   const MAX_CHARS = 58;
   const FONT_SIZE = 18;
   const LINE_HEIGHT = 26;
@@ -123,7 +124,7 @@ function generateSvg(text: string, sig: string): string {
   <rect x="${BORDER}" y="${BORDER}" width="${WIDTH - BORDER * 2}" height="${TITLE_H}" fill="url(#titleGrad)"/>
 
   <!-- IQ logo in title bar -->
-  <image href="./public/iq_logo.svg" x="${BORDER + 6}" y="${BORDER + 4}" width="28" height="28"/>
+  <image href="${IQ_LOGO}" x="${BORDER + 6}" y="${BORDER + 4}" width="28" height="28"/>
 
   <!-- Title text (offset for logo) -->
   <text x="${BORDER + 40}" y="${BORDER + 24}" font-family="DejaVu Sans Mono, monospace" font-size="16" font-weight="bold" fill="${IQ_GREEN}" filter="url(#glow)">IQLabs — ${escapeMarkup(shortSig)}</text>
@@ -183,7 +184,7 @@ function generateSvg(text: string, sig: string): string {
   <text x="${WIDTH - BORDER - 234}" y="${HEIGHT - BORDER - 11}" font-family="DejaVu Sans Mono, monospace" font-size="12" font-weight="bold" fill="${IQ_GREEN_DARK}">ON-CHAIN</text>
 
   <!-- Right — Solana Internet logo -->
-  <image href="./public/solana-internet.png" x="${WIDTH - BORDER - 138}" y="${HEIGHT - BORDER - FOOTER_H - 20}" width="136" height="72"/>
+  <image href="${SOLANA_INTERNET_LOGO}" x="${WIDTH - BORDER - 138}" y="${HEIGHT - BORDER - FOOTER_H - 20}" width="136" height="72"/>
 </svg>`;
 }
 
@@ -195,12 +196,13 @@ renderRouter.get("/:sig", async (c) => {
 
   const isPng = Resvg !== null;
   const format = isPng ? "png" : "svg";
-  const cacheKey = `render-${format}:${sig}`;
+  const renderKey = `${RENDER_REVISION}-${format}:${sig}`;
+  const cacheKey = `render:${renderKey}`;
 
   // Check caches
   let buf = imageCache.get(cacheKey);
   if (!buf) {
-    const disk = await getDiskCache("render", sig);
+    const disk = await getDiskCache("render", renderKey);
     if (disk) {
       buf = disk;
       imageCache.set(cacheKey, buf, TTL.IMAGE);
@@ -233,7 +235,7 @@ renderRouter.get("/:sig", async (c) => {
       }
 
       imageCache.set(cacheKey, buf, TTL.IMAGE);
-      await setDiskCache("render", sig, buf);
+      await setDiskCache("render", renderKey, buf);
     } catch (e: unknown) {
       const msg = e instanceof Error ? e.message : "unknown error";
       console.error("render error:", msg);
@@ -247,7 +249,7 @@ renderRouter.get("/:sig", async (c) => {
 
   return c.body(new Uint8Array(buf), 200, {
     "Content-Type": contentType,
-    "Cache-Control": "public, max-age=31536000, immutable",
+    "Cache-Control": "public, max-age=300, must-revalidate",
     ETag: etag,
   });
 });
