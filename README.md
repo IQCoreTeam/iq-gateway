@@ -6,7 +6,7 @@ A read-only HTTP cache for IQ Labs on-chain data. Fetches from the blockchain an
 configured EVM network at once, with the chain picked per request. `IQ_CHAIN`
 locks a process to a single chain when you want fault isolation:
 
-- unset or `multi` (default): Solana + all EVM networks in one process. The
+- unset (default): Solana + all EVM networks in one process. The
   resolver picks the chain per request from the id shape (base58 vs `0x`) or an
   explicit `?network=` query param.
 - `IQ_CHAIN=solana`: Solana only (devnet / mainnet-beta / testnet) via [solana-sdk](https://www.npmjs.com/package/@iqlabs-official/solana-sdk)
@@ -14,6 +14,8 @@ locks a process to a single chain when you want fault isolation:
 
 Cache, RPC queue, ETag/304, SSE, and the server shell are shared. See
 [Architecture](#architecture) and [Chains](#chains).
+
+> Configuration note for this revision: leave `IQ_CHAIN` unset for multi-chain mode. Explicit `IQ_CHAIN=multi` starts with no chain wrappers; use `IQ_CHAIN=solana` for the recovered production configuration.
 
 ## Why Run Your Own?
 
@@ -105,7 +107,7 @@ network within it comes from `SOLANA_CLUSTER` or `IQETH_NETWORK`).
 
 | Variable | Required | Description |
 |----------|----------|-------------|
-| `IQ_CHAIN` | No | `solana` (default) or `evm` — selects the chain adapter + route set |
+| `IQ_CHAIN` | No | Unset (default) serves Solana + EVM; `solana` or `evm` locks the chain adapter + route set |
 | `PORT` | No | Server port (default: 3000) |
 | `BASE_PATH` | No | URL prefix if behind reverse proxy |
 | `MAX_CACHE_SIZE` | No | Max disk cache before cleanup (default: 10GB) |
@@ -430,3 +432,7 @@ The resolver also reads `Record.TXT` as a fallback.
 ### caching
 
 Lookups are cached 5 minutes (memory + disk, both positive and negative). Concurrent cold-cache requests for the same domain are deduplicated so only one Solana RPC call fires.
+
+## Deploy with Akash Console Air
+
+See the [gateway operations guide](docs/operations/gateway-recovery-handoff.md) for the local wallet-based Console Air workflow, the deployed Solana-only configuration, the redacted SDL, Cloudflare DNS, and funding instructions.
