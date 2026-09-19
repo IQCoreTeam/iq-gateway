@@ -1,0 +1,52 @@
+# Redacted recovery configuration reference. Working deployment: DSEQ 28688125; actual accepted lease rate: 18 uACT/block.
+# Image source: 25427b3f50a4d0f8db365b6be0eb029358d1cda2. Gateway serves Solana requests.
+# HELIUS_API_KEYS intentionally omitted: verified standard RPC path; no paid batch assumption.
+version: "2.0"
+services:
+  gateway:
+    image: ghcr.io/iqcoreteam/iq-gateway@sha256:7fce271cf560ebfd3760e966c174674816cbe47deca2f63ec5b44f0a121e1a5b
+    expose:
+      - port: 3000
+        as: 80
+        accept:
+          - gateway.solanainternet.com
+        to:
+          - global: true
+    env:
+      - IQ_CHAIN=solana
+      - SOLANA_CLUSTER=mainnet-beta
+      - SOLANA_RPC_ENDPOINT=REPLACE_WITH_WORKING_RPC_ENDPOINT
+      - QUEUE_CONCURRENCY=1
+      - QUEUE_MIN_TIME_MS=500
+      - PORT=3000
+    params:
+      storage:
+        cache:
+          mount: /app/cache
+          readOnly: false
+profiles:
+  compute:
+    gateway:
+      resources:
+        cpu:
+          units: 4
+        memory:
+          size: 4Gi
+        storage:
+          - size: 1Gi
+          - name: cache
+            size: 10Gi
+            attributes:
+              persistent: true
+              class: beta3
+  placement:
+    recovery:
+      pricing:
+        gateway:
+          denom: uact
+          amount: 18.32445129317058 # preparation bid ceiling; not the accepted lease price
+deployment:
+  gateway:
+    recovery:
+      profile: gateway
+      count: 1
