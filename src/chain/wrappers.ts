@@ -119,7 +119,10 @@ const EVM_NETWORKS = Object.keys(NETWORKS) as NetworkMode[];
  *  IQ_CHAIN locks to one chain (back-compat single-chain deploys); unset builds
  *  Solana + every EVM network so one process serves all. */
 export function buildWrappers(): Record<string, ChainWrapper> {
-  const lock = process.env.IQ_CHAIN;
+  // IQ_CHAIN=multi is an explicit alias for unset (serve every chain), matching
+  // server.ts's mode selection; only "solana"/"evm" actually lock a single chain.
+  // Without this, lock === "multi" fell through to neither branch and left the map empty.
+  const lock = process.env.IQ_CHAIN === "multi" ? undefined : process.env.IQ_CHAIN;
   const map: Record<string, ChainWrapper> = {};
   const wantSolana = !lock || lock === "solana";
   const wantEvm = !lock || lock === "evm";
