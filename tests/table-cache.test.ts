@@ -1,6 +1,8 @@
-import { beforeEach, describe, expect, mock, test } from "bun:test";
+import { beforeEach, describe, expect, mock, spyOn, test } from "bun:test";
 
 import "./helpers/cache-fixture";
+import { createHash } from "node:crypto";
+import { getDiskCache, setDiskCache } from "../src/cache";
 
 const TABLE_PDA = "11111111111111111111111111111111";
 // Disk cache (CACHE_DIR) persists across tests in this file and /rows pages
@@ -19,6 +21,9 @@ type Meta = {
 };
 
 let signatures: string[] = [];
+let signatureError: Error | null = null;
+let singleRowError: Error | null = null;
+let singleRowReads = 0;
 let rowsBySig = new Map<string, Row>();
 let metaResponses: Array<Meta | Promise<Meta>> = [];
 let signatureFetches: Array<{ limit: number; before?: string }> = [];
@@ -43,13 +48,18 @@ mock.module("../src/chain/solana", () => ({
   fetchSignatureIndex: async () => [],
   readRowsBySignatures: async (sigs: string[]) => sigs.map((sig) => rowsBySig.get(sig)).filter(Boolean),
   fetchRecentSignatures: async (_tablePda: string, limit = 50, before?: string) => {
+    if (signatureError) throw signatureError;
     if (signatureGate) await signatureGate;
     signatureFetches.push({ limit, before });
     const start = before ? signatures.indexOf(before) + 1 : 0;
     return signatures.slice(start, start + limit);
   },
   readMultipleRows: async (sigs: string[]) => new Map(sigs.map((sig) => [sig, rowsBySig.get(sig) ?? null])),
-  readSingleRow: async (sig: string) => rowsBySig.get(sig) ?? null,
+  readSingleRow: async (sig: string) => {
+    singleRowReads++;
+    if (singleRowError) throw singleRowError;
+    return rowsBySig.get(sig) ?? null;
+  },
   generateETag: () => "etag",
   decodeAssetData: () => ({ data: null, metadata: null }),
   detectImageType: () => "application/octet-stream",
@@ -67,16 +77,19 @@ mock.module("../src/chain/solana", () => ({
 
 const { tableRouter, rowsCache, indexCache, sliceCache, inflight, lastRefresh } = await import("../src/routes/table");
 
-async function waitFor(check: () => boolean): Promise<void> {
+async function waitFor(check: () => boolean | Promise<boolean>): Promise<void> {
   for (let i = 0; i < 20; i++) {
-    if (check()) return;
+    if (await check()) return;
     await new Promise((resolve) => setTimeout(resolve, 0));
   }
-  expect(check()).toBe(true);
+  expect(await check()).toBe(true);
 }
 
 beforeEach(() => {
   signatures = [];
+  signatureError = null;
+  singleRowError = null;
+  singleRowReads = 0;
   rowsBySig = new Map();
   metaResponses = [];
   signatureFetches = [];
@@ -89,6 +102,32 @@ beforeEach(() => {
 });
 
 describe("/table/:pda/rows cache refresh", () => {
+  test("fresh read exposes an RPC failure while preserving ordinary cached reads", async () => {
+    signatures = ["sig-fresh-contract"];
+    rowsBySig.set("sig-fresh-contract", { __txSignature: "sig-fresh-contract", value: "preserved" });
+    const initial = await tableRouter.request(`/${TABLE_PDA}/rows?limit=37&fresh=true`);
+    expect(initial.status).toBe(200);
+    expect((await initial.json()).cached).toBe(false);
+    const diskKey = createHash("sha256").update(`${TABLE_PDA}:37:`).digest("hex").slice(0, 24);
+    await waitFor(async () => (await getDiskCache("rows", diskKey)) !== null);
+
+    signatureError = new Error("upstream RPC unavailable");
+    const failed = await tableRouter.request(`/${TABLE_PDA}/rows?limit=37&fresh=true`);
+    expect(failed.status).toBe(503);
+    expect((await failed.json()).error).toBe("fresh table read unavailable");
+
+    const cached = await tableRouter.request(`/${TABLE_PDA}/rows?limit=37`);
+    expect(cached.status).toBe(200);
+    const body = await cached.json();
+    expect(body.cached).toBe(true);
+    expect(body.rows[0].value).toBe("preserved");
+
+    signatureError = null;
+    const recovered = await tableRouter.request(`/${TABLE_PDA}/rows?limit=37&fresh=true`);
+    expect(recovered.status).toBe(200);
+    expect((await recovered.json()).cached).toBe(false);
+  });
+
   test("notify keeps cached head page capped at the requested limit", async () => {
     signatures = ["sig-a", "sig-b", "sig-c", "sig-d", "sig-e"];
     rowsBySig = new Map([
@@ -442,4 +481,52 @@ describe("/table/:pda/threads notify injection", () => {
     expect(body.threads.map((t: { op: Row }) => t.op.id)).toEqual(["b", "a"]);
     expect(body.count).toBe(2);
   });
+});
+
+// Real router, memory TTL and disk persistence; only chain reads are controlled.
+// These scenarios establish local behavior, not the primary deployment's RPC error.
+describe("notify durability across head-cache expiry", () => {
+  for (const [label, failure, limit] of [
+    ["successful chain verification", null, 50],
+    ["RPC forbidden", new Error("403 Forbidden"), 20],
+    ["RPC quota failure", new Error("429 Too Many Requests"), 10],
+  ] as const) {
+    test(label, async () => {
+      const key = createHash("sha256").update(`${GAP_TABLE_PDA}:${limit}:`).digest("hex").slice(0, 24);
+      const old = { __txSignature: "old-durable", value: "old" };
+      const added = { __txSignature: "new-durable", value: "new" };
+      await setDiskCache("rows", key, JSON.stringify({ tablePda: GAP_TABLE_PDA,
+        rows: [old], count: 1, limit, before: null, nextCursor: null }));
+      rowsBySig.set(added.__txSignature, added);
+      singleRowError = failure;
+      const notify = await tableRouter.request(`/${GAP_TABLE_PDA}/notify`, {
+        method: "POST", headers: { "content-type": "application/json" },
+        body: JSON.stringify({ txSignature: added.__txSignature, row: added }),
+      });
+      expect(notify.status).toBe(200);
+      await waitFor(() => singleRowReads > 0);
+      const immediate = await tableRouter.request(`/${GAP_TABLE_PDA}/rows?limit=${limit}`);
+      expect((await immediate.json()).rows.map((r: Row) => r.__txSignature)).toContain("new-durable");
+      if (!failure) {
+        await waitFor(async () => (await getDiskCache("rows", key))?.toString().includes("new-durable") === true);
+      } else {
+        expect((await getDiskCache("rows", key))?.toString()).not.toContain("new-durable");
+      }
+      const clock = spyOn(Date, "now").mockReturnValue(Date.now() + 61_000);
+      try {
+        expect(rowsCache.get(key)).toBeNull(); // Actual expiry, not just clear().
+        const afterExpiry = await tableRouter.request(`/${GAP_TABLE_PDA}/rows?limit=${limit}`);
+        const body = await afterExpiry.json();
+        expect(body.cached).toBe(true);
+        expect(body.rows.some((r: Row) => r.__txSignature === "new-durable")).toBe(!failure);
+        expect(body.rows.some((r: Row) => r.__txSignature === "old-durable")).toBe(true);
+      } finally {
+        clock.mockRestore();
+      }
+      // Model a new process's empty memory while preserving the real disk cache.
+      rowsCache.clear();
+      const promoted = await tableRouter.request(`/${GAP_TABLE_PDA}/rows?limit=${limit}`);
+      expect((await promoted.json()).rows.some((r: Row) => r.__txSignature === "new-durable")).toBe(!failure);
+    });
+  }
 });

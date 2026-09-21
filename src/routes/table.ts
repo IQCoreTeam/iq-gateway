@@ -421,6 +421,12 @@ tableRouter.get("/:tablePda/rows", async (c) => {
     if (message.includes("not found") || message.includes("Invalid public key")) {
       return c.json({ error: "table not found", tablePda }, 404);
     }
+    // An explicitly fresh read must not conceal an RPC failure as success.
+    // Leave the disk copy intact for ordinary offline/cache-tolerant reads.
+    if (fresh) {
+      console.warn(`[table] fresh read failed for ${tablePda}:`, message);
+      return c.json({ error: "fresh table read unavailable", tablePda }, 503);
+    }
     // Serve stale disk cache on RPC failure instead of 500
     const stale = await getDiskCache("rows", key);
     if (stale) {
