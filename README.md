@@ -117,6 +117,7 @@ network within it comes from `SOLANA_CLUSTER` or `IQETH_NETWORK`).
 |----------|----------|-------------|
 | `SOLANA_CLUSTER` | Yes | `devnet`, `mainnet-beta`, or `testnet` |
 | `SOLANA_RPC_ENDPOINT` | Yes | Solana RPC URL (must match cluster) |
+| `SOLANA_ASSET_READ_RPS` | No | Per-asset session read rate; unset preserves the SDK default (2 requests/second). Set within your RPC budget. Concurrent assets can multiply aggregate traffic. Worker concurrency is bounded by the gateway queue configuration. |
 | `HELIUS_API_KEY` | No | Helius API key for faster reads (paid plan enables gTFA + batch) |
 | `HELIUS_API_KEYS` | No | Comma-separated Helius keys for 429 fallback (overrides `HELIUS_API_KEY`) |
 | `BACKFILL_FROM_SLOT` | No | Start slot for historical backfill (requires paid Helius). Set to `398615411` for full IQ Labs history |
