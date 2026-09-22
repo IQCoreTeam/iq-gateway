@@ -1,12 +1,17 @@
 import { Connection, PublicKey } from "@solana/web3.js";
 import { reader as sdkReader } from "@iqlabs-official/solana-sdk";
 import { MemoryCache } from "../../cache";
+import { HELIUS_RPC } from "./helius";
 
 const NULL_MINT = "11111111111111111111111111111111";
 const META_TTL = 5 * 60 * 1000; // 5min — table metadata rarely changes
 
+// Must match reader.ts / sns.ts: HELIUS_RPC carries the SOLANA_CLUSTER (devnet
+// vs mainnet) choice. Without it, meta reads defaulted to mainnet even when the
+// deployment ran on devnet, so devnet tables "failed to decode" here while the
+// row reader (which honors HELIUS_RPC) read them fine.
 const metaRpc = new Connection(
-  process.env.SOLANA_RPC_ENDPOINT || "https://api.mainnet-beta.solana.com",
+  HELIUS_RPC || process.env.SOLANA_RPC_ENDPOINT || "https://api.mainnet-beta.solana.com",
 );
 const metaCache = new MemoryCache<string>(500);
 

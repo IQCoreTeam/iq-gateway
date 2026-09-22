@@ -4,7 +4,7 @@ import { Connection, PublicKey } from "@solana/web3.js";
 import { BorshAccountsCoder } from "@coral-xyz/anchor";
 import { createHash } from "node:crypto";
 import iqlabs from "@iqlabs-official/solana-sdk";
-import { fetchSignatureIndex, readRowsBySignatures, fetchRecentSignatures, readMultipleRows, readSingleRow, getTableMetaCached } from "../chain/solana";
+import { fetchSignatureIndex, readRowsBySignatures, fetchRecentSignatures, readMultipleRows, readSingleRow, getTableMetaCached, HELIUS_RPC } from "../chain/solana";
 import { MemoryCache, TTL, getDiskCache, setDiskCache, deleteDiskCache, deduped } from "../cache";
 import { ingestRow } from "../cache/catalog-ingest";
 import { invalidateUserAssets } from "./user";
@@ -1016,8 +1016,10 @@ tableRouter.post("/:tablePda/notify", async (c) => {
 
 import { contract } from "@iqlabs-official/solana-sdk";
 const accountCoder = new BorshAccountsCoder(contract.IQ_IDL);
+// Honor SOLANA_CLUSTER via HELIUS_RPC (see chain/solana/meta.ts) so /dbroot
+// reads the same cluster as the row reader instead of defaulting to mainnet.
 const metaRpc = new Connection(
-  process.env.SOLANA_RPC_ENDPOINT || "https://api.mainnet-beta.solana.com",
+  HELIUS_RPC || process.env.SOLANA_RPC_ENDPOINT || "https://api.mainnet-beta.solana.com",
 );
 
 tableRouter.get("/:tablePda/meta", async (c) => {
