@@ -1,3 +1,5 @@
+import { isPreformattedText } from "../inscription-layout";
+import { IQ_LOGO, SOLANA_INTERNET_LOGO, RENDER_REVISION } from "../branding";
 import { Hono } from "hono";
 import { readAsset, generateETag, decodeAssetData, detectImageType } from "../chain/solana";
 import { imageCache, TTL, getDiskCache, setDiskCache } from "../cache";
@@ -5,7 +7,7 @@ import { escapeMarkup } from "./render";
 
 export const viewRouter = new Hono();
 
-function renderHtmlPage(text: string, sig: string, baseUrl: string): string {
+export function renderHtmlPage(text: string, sig: string, baseUrl: string): string {
   const shortSig = sig.slice(0, 8) + "..." + sig.slice(-8);
 
   let displayContent: string;
@@ -26,7 +28,7 @@ function renderHtmlPage(text: string, sig: string, baseUrl: string): string {
 <title>IQLabs — ${escapeMarkup(shortSig)}</title>
 <meta property="og:title" content="IQLabs Inscription"/>
 <meta property="og:description" content="${escapeMarkup(text.slice(0, 200))}"/>
-<meta property="og:image" content="${baseUrl}/render/${sig}"/>
+<meta property="og:image" content="${baseUrl}/render/${sig}?v=${RENDER_REVISION}"/>
 <style>
 * { margin:0; padding:0; box-sizing:border-box; }
 
@@ -110,26 +112,28 @@ body::after {
   display: flex;
   align-items: center;
   justify-content: space-between;
-  height: 36px;
+  min-height: 36px;
   margin: 4px 4px 0 4px;
   user-select: none;
 }
 .title-bar .title {
+  min-width: 0;
   display: flex;
   align-items: center;
   gap: 8px;
   color: #41FF00;
-  font-size: 16px;
+  font-size: clamp(12px, 2.6vw, 16px);
   font-weight: bold;
   text-shadow: 0 0 8px #00ff22;
 }
 .title-bar .title .title-logo {
   width: 28px; height: 28px;
+  flex-shrink: 0;
   filter: brightness(1.2);
 }
 
 /* Win95 title buttons */
-.title-buttons { display: flex; gap: 2px; }
+.title-buttons { display: flex; gap: 2px; flex-shrink: 0; }
 .title-buttons button {
   width: 20px; height: 20px;
   background: #c0c0c0;
@@ -166,10 +170,10 @@ body::after {
 }
 .content-area {
   background: #0a0a0a;
-  padding: 28px;
+  padding: clamp(12px, 3vw, 28px);
   min-height: 80px;
   max-height: 80vh;
-  overflow-y: auto;
+  overflow: auto;
   font-size: 20px;
   font-weight: bold;
   line-height: 1.5;
@@ -187,6 +191,14 @@ body::after {
       transparent 1px,
       transparent 4px
     );
+}
+.content-area.preformatted {
+  white-space: pre;
+  word-break: normal;
+  overflow-wrap: normal;
+  font-size: clamp(12px, 2.4vw, 20px);
+  line-height: 1.35;
+  tab-size: 4;
 }
 .content-area pre {
   font-family: inherit;
@@ -231,13 +243,15 @@ body::after {
 
 /* Footer — Win95 status bar with inset panels */
 .status-bar {
-  display: flex;
-  gap: 2px;
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto auto;
+  gap: 4px;
   padding: 4px;
 }
 .status-panel {
-  flex: 1;
-  padding: 2px 8px;
+  min-width: 0;
+  padding: 6px 8px;
+  line-height: 1.4;
   font-size: 12px;
   color: #000;
   border-top: 1px solid #808080;
@@ -247,7 +261,7 @@ body::after {
   background: #f0f0f0;
   display: flex;
   align-items: center;
-  height: 24px;
+  min-height: 32px;
 }
 .status-panel.right {
   flex: 0 0 auto;
@@ -271,13 +285,22 @@ body::after {
   border: none;
 }
 .status-sol-internet {
-  height: 72px;
+  display: block;
+  height: 24px;
+  max-width: 100%;
+  object-fit: contain;
   filter: drop-shadow(0 0 6px rgba(65, 255, 0, 0.5));
   vertical-align: middle;
 }
 
 /* Selection color */
 ::selection { background: #41FF00; color: #000; }
+@media (max-width: 480px) {
+  body { padding: 12px; }
+  .status-bar { grid-template-columns: minmax(0, 1fr) auto; }
+  .status-panel:first-child { grid-column: 1 / -1; }
+  .status-panel.right { justify-content: flex-start; }
+}
 </style>
 </head>
 <body>
@@ -285,7 +308,7 @@ body::after {
 <div class="window">
   <div class="title-bar">
     <span class="title">
-      <img class="title-logo" src="/iq_logo.svg" alt=""/>
+      <img class="title-logo" src="${IQ_LOGO}" alt=""/>
       IQLabs — ${escapeMarkup(shortSig)}
     </span>
     <div class="title-buttons">
@@ -293,12 +316,12 @@ body::after {
     </div>
   </div>
   <div class="content-wrap">
-    <div class="content-area">${isJson ? "<pre>" : ""}${displayContent}${isJson ? "</pre>" : ""}</div>
+    <div class="content-area${isJson || isPreformattedText(text) ? " preformatted" : ""}" tabindex="0" role="region" aria-label="Inscription content">${isJson ? "<pre>" : ""}${displayContent}${isJson ? "</pre>" : ""}</div>
   </div>
   <div class="status-bar">
     <div class="status-panel">inscribed on solana via iqlabs</div>
     <div class="status-panel right"><span class="status-dot"></span> ON-CHAIN</div>
-    <div class="status-panel sol-panel"><img class="status-sol-internet" src="/solana-internet.png" alt="Solana Internet"/></div>
+    <div class="status-panel sol-panel"><img class="status-sol-internet" src="${SOLANA_INTERNET_LOGO}" alt="Solana Internet"/></div>
   </div>
 </div>
 
@@ -360,7 +383,7 @@ viewRouter.get("/:sig", async (c) => {
   if (c.req.header("If-None-Match") === etag) return c.body(null, 304);
 
   return c.html(html, 200, {
-    "Cache-Control": "public, max-age=31536000, immutable",
+    "Cache-Control": "public, max-age=300, must-revalidate",
     ETag: etag,
   });
 });

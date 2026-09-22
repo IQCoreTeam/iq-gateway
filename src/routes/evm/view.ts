@@ -1,3 +1,4 @@
+import { isPreformattedText } from "../../inscription-layout";
 import { Hono } from "hono";
 import { imageCache, TTL, getDiskCache, setDiskCache } from "../../cache";
 import { escapeMarkup } from "./render";
@@ -6,7 +7,7 @@ import type { EvmEnv } from "../../chain/wrappers";
 
 export const viewRouter = new Hono<EvmEnv>();
 
-function renderHtmlPage(text: string, txHash: string, baseUrl: string): string {
+export function renderHtmlPage(text: string, txHash: string, baseUrl: string): string {
   const short = txHash.slice(0, 10) + "..." + txHash.slice(-8);
 
   let displayContent: string;
@@ -45,19 +46,21 @@ body {
 }
 .content {
   background: #0a0a0a; color: #41FF00; padding: 28px;
-  min-height: 80px; max-height: 80vh; overflow-y: auto;
+  min-height: 80px; max-height: 80vh; overflow: auto;
   font-size: 20px; font-weight: bold; line-height: 1.5;
   white-space: pre-wrap; word-break: break-word;
   text-shadow: 0 0 6px rgba(65, 255, 0, 0.4);
 }
-.footer { background: #f0f0f0; color: #006400; padding: 6px 10px; font-size: 12px; display: flex; justify-content: space-between; }
+.content.preformatted { white-space: pre; word-break: normal; overflow-wrap: normal; font-size: clamp(12px, 2.4vw, 20px); line-height: 1.35; tab-size: 4; }
+.footer { background: #f0f0f0; color: #006400; padding: 6px 10px; font-size: 12px; display: flex; flex-wrap: wrap; gap: 6px 12px; justify-content: space-between; }
+@media (max-width: 480px) { body { padding: 12px; } .content { padding: 12px; } }
 ::selection { background: #41FF00; color: #000; }
 </style>
 </head>
 <body>
 <div class="window">
   <div class="title-bar"><span>IQLabs — ${escapeMarkup(short)}</span><span>_  □  ✕</span></div>
-  <div class="content">${isJson ? "<pre>" : ""}${displayContent}${isJson ? "</pre>" : ""}</div>
+  <div class="content${isJson || isPreformattedText(text) ? " preformatted" : ""}" tabindex="0" role="region" aria-label="Inscription content">${isJson ? "<pre>" : ""}${displayContent}${isJson ? "</pre>" : ""}</div>
   <div class="footer"><span>inscribed on EVM via iqlabs</span><span>● ON-CHAIN</span></div>
 </div>
 </body>
@@ -107,7 +110,7 @@ viewRouter.get("/:txHash", async (c) => {
   if (c.req.header("If-None-Match") === etag) return c.body(null, 304);
 
   return c.html(html, 200, {
-    "Cache-Control": "public, max-age=31536000, immutable",
+    "Cache-Control": "public, max-age=300, must-revalidate",
     ETag: etag,
   });
 });
