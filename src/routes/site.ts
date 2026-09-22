@@ -129,11 +129,12 @@ async function fetchManifest(sig: string): Promise<Manifest> {
 }
 
 async function fetchFile(sig: string): Promise<Buffer> {
-  const key = `file:${sig}`;
+  const key = `file:v2:${sig}`;
+  const diskKey = `v2:${sig}`;
   const cached = fileCache.get(key);
   if (cached) return cached;
 
-  const disk = await getDiskCache("site-file", sig);
+  const disk = await getDiskCache("site-file", diskKey);
   if (disk) {
     fileCache.set(key, disk, TTL.IMAGE);
     return disk;
@@ -144,9 +145,9 @@ async function fetchFile(sig: string): Promise<Buffer> {
     try {
       const parsed = JSON.parse(new TextDecoder().decode(backfillData));
       if (parsed.data) {
-        const buf = decodeAssetData(parsed.data);
+        const buf = decodeAssetData(parsed.data, parsed.metadata);
         fileCache.set(key, buf, TTL.IMAGE);
-        await setDiskCache("site-file", sig, buf);
+        await setDiskCache("site-file", diskKey, buf);
         return buf;
       }
     } catch {}
@@ -156,12 +157,12 @@ async function fetchFile(sig: string): Promise<Buffer> {
     const rechecked = fileCache.get(key);
     if (rechecked) return rechecked;
 
-    const { data } = await readAsset(sig);
+    const { data, metadata } = await readAsset(sig);
     if (!data) throw new Error("file not found");
 
-    const buf = decodeAssetData(data);
+    const buf = decodeAssetData(data, metadata);
     fileCache.set(key, buf, TTL.IMAGE);
-    await setDiskCache("site-file", sig, buf);
+    await setDiskCache("site-file", diskKey, buf);
     return buf;
   });
 }

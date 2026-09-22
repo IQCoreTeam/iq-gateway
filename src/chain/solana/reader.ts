@@ -10,13 +10,18 @@ import {
   heliusGetSignatures,
   heliusBatchGetTransactions,
 } from "./helius";
-import { enqueueRpc, getQueueStats, type Priority } from "../rpc-queue";
+import { enqueueRpc, getQueueStats, getQueueConfig, type Priority } from "../rpc-queue";
 
 const PRIMARY_RPC = HELIUS_RPC || process.env.SOLANA_RPC_ENDPOINT || "https://api.mainnet-beta.solana.com";
 const FALLBACK_RPC = process.env.SOLANA_RPC_ENDPOINT || "https://api.mainnet-beta.solana.com";
 
 iqlabs.setRpcUrl(PRIMARY_RPC);
 let solConnection = new Connection(PRIMARY_RPC);
+const assetReadRps = process.env.SOLANA_ASSET_READ_RPS === undefined
+  ? undefined : Number(process.env.SOLANA_ASSET_READ_RPS);
+if (assetReadRps !== undefined && (!Number.isFinite(assetReadRps) || assetReadRps <= 0)) {
+  throw new Error("SOLANA_ASSET_READ_RPS must be positive");
+}
 
 if (isHeliusEnabled()) {
   console.log("[reader] Helius RPC enabled — using batch transactions + enhanced endpoints");
@@ -95,7 +100,22 @@ export function generateETag(content: string | Buffer): string {
   return `"${createHash("sha256").update(content).digest("hex").slice(0, 16)}"`;
 }
 
-export function decodeAssetData(data: string): Buffer {
+export function decodeAssetData(data: string, metadata?: string): Buffer {
+  // IQ Git explicitly stores blob contents as base64, including tiny files.
+  // Keep the legacy heuristic for assets without that format marker.
+  let iqGitBlob = false;
+  if (metadata) {
+    try {
+      const parsed = JSON.parse(metadata);
+      iqGitBlob = parsed.filetype === "application/octet-stream" &&
+        typeof parsed.filename === "string" && parsed.filename.startsWith("iqgit-blob:");
+    } catch { /* Older assets may not have JSON metadata. */ }
+  }
+  if (iqGitBlob) {
+    const decoded = Buffer.from(data, "base64");
+    if (decoded.toString("base64") !== data) throw new Error("invalid IQ Git blob encoding");
+    return decoded;
+  }
   if (data.startsWith("data:")) {
     return Buffer.from(data.split(",")[1], "base64");
   }
@@ -124,7 +144,10 @@ export async function readAsset(txSig: string) {
   );
   if (!tx) throw new Error("transaction not found");
 
-  const result = await iqlabs.reader.readUserInventoryCodeInFromTx(tx);
+  const result = await iqlabs.reader.readUserInventoryCodeInFromTx(tx,
+    assetReadRps === undefined ? undefined : {
+      maxRps: assetReadRps, maxConcurrency: getQueueConfig().concurrency,
+    });
   const signer = tx.transaction.message.getAccountKeys().get(0)?.toBase58();
 
   return {
