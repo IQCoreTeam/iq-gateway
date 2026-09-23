@@ -105,6 +105,7 @@ if (MODE === "evm") {
   app.route("/user", r.userRouter);
   app.route("/table", r.tableRouter);
   app.route("/data", r.dataRouter);
+  app.route("/media", (await import("./routes/media")).mediaRouter);
   app.route("/ens", r.ensRouter);
   app.route("/cache", r.cacheRouter);
   app.route("/gate", r.gateRouter);
@@ -179,6 +180,7 @@ if (MODE === "evm") {
     evmApp.route("/user", r.userRouter);
     evmApp.route("/table", r.tableRouter);
     evmApp.route("/data", r.dataRouter);
+    evmApp.route("/media", (await import("./routes/media")).mediaRouter);
     evmApp.route("/ens", r.ensRouter);
     evmApp.route("/gate", r.gateRouter);
     evmApp.route("/dbroots", r.dbrootsRouter);
@@ -312,6 +314,12 @@ async function bootSolana(target: Hono<any>): Promise<void> {
   target.route("/user", r.userRouter);
   target.route("/table", r.tableRouter);
   target.route("/data", r.dataRouter);
+  const { buildSolanaWrapper } = await import("./chain/wrappers");
+  const media = new Hono<{ Variables: { chain: ReturnType<typeof buildSolanaWrapper> } }>();
+  const mediaChain = buildSolanaWrapper();
+  media.use("*", async (c, next) => { c.set("chain", mediaChain); await next(); });
+  media.route("/", (await import("./routes/media")).mediaRouter);
+  target.route("/media", media);
   target.route("/site", r.siteRouter);
   target.route("/sns", r.snsRouter);
   target.route("/gate", r.gateRouter);
