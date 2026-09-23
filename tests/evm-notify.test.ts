@@ -1,5 +1,7 @@
 import { describe, test, expect, mock } from "bun:test";
 import { Hono } from "hono";
+import { createHash } from "node:crypto";
+import { getDiskCache } from "../src/cache";
 import "./helpers/cache-fixture";
 mock.module("../src/chain/evm/log-index", () => ({ scheduleTableBackfill() {} }));
 mock.module("../src/cache/catalog-ingest.evm", () => ({ ingestRow: async () => {} }));
@@ -15,7 +17,17 @@ app.use("*", async (c, next) => {
 });
 app.route("/table", tableRouter);
 async function notify(table: string, row: Record<string, unknown>, n: number) {
-  return app.request(`/table/iqchan/${table}/notify`, {method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({txHash:hash(n),row})});
+  const response = await app.request(`/table/iqchan/${table}/notify`, {method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({txHash:hash(n),row})});
+  // Notify persists its row asynchronously. Observe that write before the
+  // shared fixture closes SQLite and removes the temporary directory.
+  const key = createHash("sha256").update(`robinhood:row:${hash(n)}`).digest("hex").slice(0, 24);
+  let disk: Buffer | null = null;
+  for (let i = 0; i < 100 && !disk; i++) {
+    disk = await getDiskCache("meta", key, "robinhood");
+    if (!disk) await Bun.sleep(5);
+  }
+  expect(disk).not.toBeNull();
+  return response;
 }
 
 describe("EVM notify read-after-write", () => {
