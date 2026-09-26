@@ -1,6 +1,9 @@
 import { beforeEach, describe, expect, mock, spyOn, test } from "bun:test";
 
 import "./helpers/cache-fixture";
+// Preserve the real pure decoder: Bun module mocks can affect barrel re-exports
+// used by the decoding suite in the same process. Only chain I/O is faked.
+import { decodeAssetData } from "../src/chain/solana/reader";
 import { createHash } from "node:crypto";
 import { getDiskCache, setDiskCache } from "../src/cache";
 
@@ -61,7 +64,7 @@ mock.module("../src/chain/solana", () => ({
     return rowsBySig.get(sig) ?? null;
   },
   generateETag: () => "etag",
-  decodeAssetData: () => ({ data: null, metadata: null }),
+  decodeAssetData,
   detectImageType: () => "application/octet-stream",
   getRpcMetrics: () => ({ totalCalls: 0, rateLimited: 0, errors: 0, fallbacks: 0, heliusCalls: 0, heliusEnabled: false }),
   isHeliusEnabled: () => false,
@@ -178,6 +181,7 @@ describe("/table/:pda/rows cache refresh", () => {
       releaseBackground = resolve;
     });
     metaResponses.push(backgroundMeta, meta(2));
+    lastRefresh.clear(); // Make the cached entry eligible for refresh.
 
     const cached = await tableRouter.request(`/${TABLE_PDA}/rows?limit=1`);
     expect(cached.status).toBe(200);
@@ -206,6 +210,7 @@ describe("/table/:pda/rows cache refresh", () => {
 
     signatureFetches = [];
     metaResponses.push(meta(2));
+    lastRefresh.clear(); // Make the cached entry eligible for refresh.
 
     const cached = await tableRouter.request(`/${TABLE_PDA}/rows?limit=3`);
     expect(cached.status).toBe(200);
@@ -329,6 +334,7 @@ describe("/table/:pda/rows cache refresh", () => {
     ]);
     signatureFetches = [];
     metaResponses.push(meta(2));
+    lastRefresh.clear(); // Make the cached entry eligible for refresh.
 
     const cached = await tableRouter.request(`/${TABLE_PDA}/rows?limit=4`);
     expect(cached.status).toBe(200);
@@ -451,8 +457,10 @@ describe("/table/:pda/threads notify injection", () => {
     // simulating an in-flight refresh started before the notify below.
     let release!: () => void;
     signatureGate = new Promise<void>((resolve) => { release = resolve; });
+    lastRefresh.clear(); // Make the cached entry eligible for refresh.
     const warm = await tableRouter.request(`/${TABLE_PDA}/threads?limit=50`);
     expect((await warm.json()).cached).toBe(true);
+    expect(inflight.size).toBeGreaterThan(0);
 
     // /notify lands while that refresh is in flight and injects row b.
     const notified = await tableRouter.request(`/${TABLE_PDA}/notify`, {

@@ -1,6 +1,9 @@
 import { beforeEach, describe, expect, mock, test } from "bun:test";
 
 import "./helpers/cache-fixture";
+// Preserve the real pure decoder: Bun module mocks can affect barrel re-exports
+// used by the decoding suite in the same process. Only chain I/O is faked.
+import { decodeAssetData } from "../src/chain/solana/reader";
 
 const TABLE_PDA = "11111111111111111111111111111111";
 
@@ -30,7 +33,7 @@ mock.module("../src/chain/solana", () => ({
   readMultipleRows: async (sigs: string[]) => new Map(sigs.map((sig) => [sig, rowsBySig.get(sig) ?? null])),
   readSingleRow: async (sig: string) => rowsBySig.get(sig) ?? null,
   generateETag: () => "etag",
-  decodeAssetData: () => ({ data: null, metadata: null }),
+  decodeAssetData,
   detectImageType: () => "application/octet-stream",
   getRpcMetrics: () => ({ totalCalls: 0, rateLimited: 0, errors: 0, fallbacks: 0, heliusCalls: 0, heliusEnabled: false }),
   isHeliusEnabled: () => false,
@@ -41,7 +44,7 @@ mock.module("../src/chain/solana", () => ({
   getTableMetaCached: async () => ({ name: "test", columns: [], idCol: "id", lastTimestamp: 1, gate: null }),
 }));
 
-const { tableRouter, rowsCache, indexCache, sliceCache, inflight } = await import("../src/routes/table");
+const { tableRouter, rowsCache, indexCache, sliceCache, inflight, lastRefresh } = await import("../src/routes/table");
 
 async function waitFor(check: () => boolean): Promise<void> {
   for (let i = 0; i < 20; i++) {
@@ -60,6 +63,7 @@ beforeEach(() => {
   indexCache.clear();
   sliceCache.clear();
   inflight.clear();
+  lastRefresh.clear();
 });
 
 describe("/table/:pda/threads", () => {
@@ -131,8 +135,8 @@ describe("/table/:pda/threads", () => {
     expect(conditional.status).toBe(304);
     expect(conditional.headers.get("ETag")).toBe(etag);
 
-    // The mem hit kicked off a background refresh; let it settle.
-    await waitFor(() => signatureFetches.length === 2);
+    // A freshly filled cache must not scan again on conditional reads.
+    expect(signatureFetches.length).toBe(1);
   });
 
   test("stale-while-revalidate: mem hit serves old data, background refresh updates it", async () => {
@@ -146,6 +150,8 @@ describe("/table/:pda/threads", () => {
     expect((await first.json()).count).toBe(1);
 
     signatures = ["tsig-f2", "tsig-f1"]; // a new row lands on chain
+    // Make this entry eligible for its normal background refresh.
+    for (const key of lastRefresh.keys()) lastRefresh.set(key, Date.now() - 30_001);
 
     const stale = await tableRouter.request(`/${TABLE_PDA}/threads?limit=9`);
     const staleBody = await stale.json();
