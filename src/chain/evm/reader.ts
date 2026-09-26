@@ -251,19 +251,20 @@ export function createEvmReader(network: NetworkMode, rpcOverride?: string) {
           const msg = err instanceof Error ? err.message : String(err);
           if (!msg.includes("Unexpected function")) throw err;
         }
+        let parsed;
         try {
           const contract = iqlabs.contract.getContract(provider);
-          const parsed = contract.interface.parseTransaction({ data: tx.data });
-          if (!parsed) return null;
-          const DB_CODE_FNS = new Set(["dbCodeIn", "dbInstructionCodeIn", "walletConnectionCodeIn"]);
-          if (!DB_CODE_FNS.has(parsed.name)) return null;
-          const onChainPath: string = parsed.args[2] ?? "";
-          const metadata: string = parsed.args[3] ?? "";
-          if (onChainPath && onChainPath !== "" && onChainPath !== "0x") return null;
-          return formatRow(txHash, metadata, null, signer, blockTime, tx.blockNumber);
+          parsed = contract.interface.parseTransaction({ data: tx.data });
         } catch {
           return null;
         }
+        if (!parsed || !["dbCodeIn", "dbInstructionCodeIn", "walletConnectionCodeIn"].includes(parsed.name)) return null;
+        const onChainPath: string = parsed.args[2] ?? "";
+        const metadata: string = parsed.args[3] ?? "";
+        const data = iqlabs.reader.isEnd(onChainPath)
+          ? metadata
+          : await iqlabs.reader.readSendCodeChain(onChainPath);
+        return formatRow(txHash, data, null, signer, blockTime, tx.blockNumber);
       });
     },
 
