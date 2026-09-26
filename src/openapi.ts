@@ -201,6 +201,12 @@ export const openapiSpec = {
         responses: { 200: { description: "Cache stats" } },
       },
     },
+    "/media/{sig}": {
+      get: { tags: ["assets"], summary: "Passive image/audio/video bytes from an inscription row",
+        description: "Accepts base64 data URLs in body/data. Up to 8 MiB encoded. Rejects HTML, SVG and external URLs. Supports a single byte Range.",
+        parameters: [sig, { name: "Range", in: "header", schema: { type: "string" } }],
+        responses: { 200: { description: "Media bytes" }, 206: { description: "Partial media" }, 400: { description: "Invalid signature" }, 404: { description: "Missing inscription" }, 413: { description: "Too large" }, 415: { description: "Unsupported media" }, 416: { description: "Invalid range" }, 422: { description: "Invalid encoding" }, 502: { description: "Chain read failed" } } },
+    },
     "/data/{sig}": {
       get: {
         tags: ["assets"],

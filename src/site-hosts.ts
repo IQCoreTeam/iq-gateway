@@ -6,6 +6,7 @@
 export const RESERVED_GATEWAY_PATHS = [
   "/site",
   "/data",
+  "/media",
   "/img",
   "/meta",
   "/render",
