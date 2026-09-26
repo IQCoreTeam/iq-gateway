@@ -1,3 +1,4 @@
+import { decodeAssetData } from "../src/chain/solana/reader";
 import { beforeEach, describe, expect, mock, test } from "bun:test";
 
 import "./helpers/cache-fixture";
@@ -30,7 +31,7 @@ mock.module("../src/chain/solana", () => ({
   readMultipleRows: async (sigs: string[]) => new Map(sigs.map((sig) => [sig, rowsBySig.get(sig) ?? null])),
   readSingleRow: async (sig: string) => rowsBySig.get(sig) ?? null,
   generateETag: () => "etag",
-  decodeAssetData: () => ({ data: null, metadata: null }),
+  decodeAssetData,
   detectImageType: () => "application/octet-stream",
   getRpcMetrics: () => ({ totalCalls: 0, rateLimited: 0, errors: 0, fallbacks: 0, heliusCalls: 0, heliusEnabled: false }),
   isHeliusEnabled: () => false,
