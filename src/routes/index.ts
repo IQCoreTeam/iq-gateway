@@ -1,4 +1,5 @@
 export { metaRouter } from "./meta";
+export { tokenMetaRouter } from "./token-meta";
 export { imgRouter } from "./img";
 export { viewRouter } from "./view";
 export { renderRouter } from "./render";

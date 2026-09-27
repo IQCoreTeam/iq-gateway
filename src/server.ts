@@ -306,6 +306,7 @@ async function bootSolana(target: Hono<any>): Promise<void> {
   const { isReservedGatewayPath, normalizeHost, isSafePath } = await import("./site-hosts");
 
   target.route("/meta", r.metaRouter);
+  target.route("/token-meta", r.tokenMetaRouter);
   target.route("/img", r.imgRouter);
   target.route("/view", r.viewRouter);
   target.route("/render", r.renderRouter);
