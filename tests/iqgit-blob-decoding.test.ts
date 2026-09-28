@@ -1,5 +1,16 @@
 import { describe, expect, test } from "bun:test";
-import { decodeAssetData } from "../src/chain/solana/reader";
+// Route tests mock the reader globally; keep real decoder assertions isolated.
+if (process.env.IQ_BLOB_TEST_ISOLATED !== "1") {
+  test("IQ Git blob decoding (isolated)", () => {
+    const result = Bun.spawnSync([process.execPath, "test", import.meta.path], {
+      env: { ...process.env, IQ_BLOB_TEST_ISOLATED: "1" },
+      stdout: "pipe", stderr: "pipe",
+    });
+    if (result.exitCode !== 0) console.error(new TextDecoder().decode(result.stderr));
+    expect(result.exitCode).toBe(0);
+  });
+} else {
+const { decodeAssetData } = await import("../src/chain/solana/reader");
 
 const metadata = JSON.stringify({ filename: "iqgit-blob:iqpages.json", filetype: "application/octet-stream" });
 
@@ -22,3 +33,5 @@ describe("IQ Git blob decoding", () => {
     expect(decodeAssetData("data:application/octet-stream;base64,AAE=")).toEqual(Buffer.from([0, 1]));
   });
 });
+
+}
