@@ -215,6 +215,19 @@ export const openapiSpec = {
         responses: { 200: { description: "`{ data, metadata, signature, signer, blockTime, slot }`" } },
       },
     },
+    "/token-meta/{sig}": {
+      get: {
+        tags: ["assets"],
+        summary: "Plain code-in body served verbatim (token uri target)",
+        description:
+          "Returns the inscribed code-in payload with no wrapper, for use as a Metaplex token uri. Frozen path: baked into the on-chain uri of minted coins.",
+        parameters: [{ ...sig, name: "sig" }],
+        responses: {
+          200: { description: "Raw inscribed JSON body" },
+          404: { description: "Transaction missing or carries no code-in payload" },
+        },
+      },
+    },
     "/meta/{sig}.json": {
       get: {
         tags: ["assets"],

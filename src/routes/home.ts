@@ -183,6 +183,7 @@ const HTML = `<!doctype html>
 <div class="ep"><code>GET /site/{sig}</code><span class="desc">serve the manifest's index</span></div>
 <div class="ep"><code>GET /site/{sig}/{path}</code><span class="desc">serve a file from the manifest</span></div>
 <div class="ep"><code>GET /meta/{sig}.json</code><span class="desc">metaplex-compatible json metadata</span></div>
+<div class="ep"><code>GET /token-meta/{sig}</code><span class="desc">inscribed code-in body, verbatim (token uri)</span></div>
 <div class="ep"><code>GET /img/{sig}.png</code><span class="desc">raw image bytes</span></div>
 <div class="ep"><code>GET /data/{sig}</code><span class="desc">raw asset data</span></div>
 <div class="ep"><code>GET /view/{sig}</code><span class="desc">rendered html view of a text inscription</span></div>
