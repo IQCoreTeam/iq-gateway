@@ -171,7 +171,7 @@ async function fetchFile(sig: string): Promise<Buffer> {
 // Returns null for absent/unsatisfiable/multi-range headers — callers fall back
 // to a full 200 response. iOS Safari only ever sends a single open range, so we
 // deliberately don't support multipart ranges.
-function parseRange(
+export function parseRange(
   range: string | undefined,
   size: number,
 ): { start: number; end: number } | null {
