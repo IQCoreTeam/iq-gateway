@@ -717,7 +717,7 @@ tableRouter.post("/:dbRootId/:tableName/notify", async (c) => {
 
   if (!row) {
     invalidateThreads(network, dbRootId, tableName);
-    for (const limit of [50, 100, 20, 10, 5]) {
+    for (let limit = 1; limit <= 100; limit++) {
       const key = cacheKey(network, dbRootId, tableName, String(limit), "");
       rowsCache.delete(key);
       lastRefresh.delete(key);
@@ -740,7 +740,7 @@ tableRouter.post("/:dbRootId/:tableName/notify", async (c) => {
   }
   invalidateThreads(network, dbRootId, tableName);
 
-  for (const limit of [50, 100, 20, 10, 5]) {
+  for (let limit = 1; limit <= 100; limit++) {
     const key = cacheKey(network, dbRootId, tableName, String(limit), "");
     const existing = rowsCache.get(key);
     if (!existing || !existing.rows) continue;
@@ -752,7 +752,7 @@ tableRouter.post("/:dbRootId/:tableName/notify", async (c) => {
   }
 
   const now = Date.now();
-  for (const limit of [50, 100, 20, 10, 5]) {
+  for (let limit = 1; limit <= 100; limit++) {
     lastRefresh.set(cacheKey(network, dbRootId, tableName, String(limit), ""), now);
   }
 
