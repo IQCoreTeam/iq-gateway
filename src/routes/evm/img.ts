@@ -38,6 +38,29 @@ imgRouter.get("/:txHash", async (c) => {
     }
   }
 
+  // A code-in row is a JSON envelope {kind, body, who}; the picture is the data
+  // URL in `body`. readAsset reassembles that envelope, so normalize here
+  // (mirrors the solana img route; not in the shared decoder), repairing old
+  // memory/disk entries that cached the raw JSON. Standalone images skip this.
+  if (/^\s*\{/.test(buf.subarray(0, 64).toString("utf8"))) {
+    let row: { kind?: string; body?: unknown } | undefined;
+    try { row = JSON.parse(buf.toString("utf8")); } catch { /* legacy data */ }
+    if ((row?.kind === "image" || row?.kind === "file") && typeof row.body === "string") {
+      const match = /^data:(image\/(?:png|jpeg|gif|webp))(?:;[^,]*)?;base64,([A-Za-z0-9+/]+={0,2})$/i.exec(row.body);
+      if (match) {
+        const decoded = Buffer.from(match[2], "base64");
+        // Reject malformed base64 and mislabeled/non-image bodies. Do not
+        // introduce active SVG/HTML support through the row format.
+        if (decoded.toString("base64").replace(/=+$/, "") === match[2].replace(/=+$/, "") &&
+            chain.detectImageType(decoded) === match[1].toLowerCase()) {
+          buf = decoded;
+          imageCache.set(cacheKey, buf, TTL.IMAGE);
+          await setDiskCache("img", txHash, buf, network);
+        }
+      }
+    }
+  }
+
   const contentType = chain.detectImageType(buf) || "image/png";
   const etag = chain.generateETag(buf);
   if (c.req.header("If-None-Match") === etag) return c.body(null, 304);
