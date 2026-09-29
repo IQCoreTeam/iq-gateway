@@ -186,7 +186,13 @@ export function createEvmReader(network: NetworkMode, rpcOverride?: string) {
         const onChainPath: string = parsed.args[2] ?? "";
         const data: string = parsed.args[3] ?? "";
         if (onChainPath && onChainPath !== "" && onChainPath !== "0x") {
-          throw new Error("linked-list dbCodeIn not supported in readAsset — use /table/.../rows");
+          // Linked-list row (a chunked image/file whose header carries only the
+          // pointer, e.g. {"total_chunks":N}). Reassemble the chunk chain the
+          // same way readTableRows resolves each row (readSendCodeChain walks
+          // onChainPath to genesis), so single-asset endpoints (/img, /render)
+          // can serve a big multi-tx inscription, not just /table/.../rows.
+          const full = await iqlabs.reader.readSendCodeChain(onChainPath);
+          return { data: full, metadata: {} as Record<string, string>, signer, blockTime, blockNumber };
         }
         return { data, metadata: {} as Record<string, string>, signer, blockTime, blockNumber };
       });
