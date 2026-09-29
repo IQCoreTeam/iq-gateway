@@ -50,6 +50,17 @@ export function generateETag(content: string | Buffer): string {
 
 export function decodeAssetData(data: string): Buffer {
   if (typeof data !== "string") return Buffer.from("");
+  // A code-in row is a JSON envelope {kind, body, who}; the picture lives in
+  // `body` (a data URL). readAsset reassembles that envelope, so the single
+  // asset image path must peel it here to serve the image, not the JSON.
+  if (data.startsWith("{")) {
+    try {
+      const row = JSON.parse(data) as { body?: unknown; img?: unknown };
+      const inner = typeof row.body === "string" ? row.body
+        : typeof row.img === "string" ? row.img : null;
+      if (inner) return decodeAssetData(inner);
+    } catch { /* not a row envelope; fall through to the raw forms below */ }
+  }
   if (data.startsWith("data:")) return Buffer.from(data.split(",")[1], "base64");
   if (data.startsWith("0x")) {
     try { return Buffer.from(data.slice(2), "hex"); } catch {}
