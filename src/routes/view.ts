@@ -9,6 +9,7 @@ export const viewRouter = new Hono();
 
 export function renderHtmlPage(text: string, sig: string, baseUrl: string): string {
   const shortSig = sig.slice(0, 8) + "..." + sig.slice(-8);
+  const explorerTxUrl = `https://solscan.io/tx/${sig}`;
 
   let displayContent: string;
   let isJson = false;
@@ -301,6 +302,24 @@ body::after {
   .status-panel:first-child { grid-column: 1 / -1; }
   .status-panel.right { justify-content: flex-start; }
 }
+
+.view-btn {
+  font-family: inherit; font-size: 11px; color: #006400; background: #e0e0e0;
+  border: 1px solid #808080; padding: 1px 7px; cursor: pointer; text-decoration: none;
+  display: inline-block;
+}
+.view-btn:hover { background: #d0d0d0; }
+.howto { position: fixed; inset: 0; background: rgba(0,0,0,0.55); display: none; align-items: center; justify-content: center; z-index: 100; padding: 16px; }
+.howto:target { display: flex; }
+.howto-box { background: #c0c0c0; width: 100%; max-width: 560px; padding: 4px; font-family: inherit; }
+.howto-title { background: linear-gradient(90deg,#000,#006400); color:#41FF00; padding: 5px 9px; display:flex; justify-content:space-between; font-weight:bold; font-size:13px; }
+.howto-title a { color:#41FF00; text-decoration:none; }
+.howto-body { background:#f0f0f0; color:#000; padding: 14px 16px; font-size: 12px; line-height: 1.65; }
+.howto-body h4 { color:#006400; margin: 0 0 6px; letter-spacing:.05em; font-size:12px; }
+.howto-body h4.mt { margin-top: 12px; }
+.howto-body p { margin: 0; }
+.howto-body ol { margin: 0; padding-left: 18px; }
+.howto-go { display:inline-block; margin-top: 14px; background:#006400; color:#fff; padding:5px 12px; text-decoration:none; font-weight:bold; }
 </style>
 </head>
 <body>
@@ -320,11 +339,27 @@ body::after {
   </div>
   <div class="status-bar">
     <div class="status-panel">inscribed on solana via iqlabs</div>
-    <div class="status-panel right"><span class="status-dot"></span> ON-CHAIN</div>
+    <div class="status-panel right"><a class="view-btn" href="#howto">how to check my data</a><a class="view-btn" href="${explorerTxUrl}" target="_blank" rel="noopener">view on explorer</a><span class="status-dot"></span> ON-CHAIN</div>
     <div class="status-panel sol-panel"><img class="status-sol-internet" src="${SOLANA_INTERNET_LOGO}" alt="Solana Internet"/></div>
   </div>
 </div>
 
+<div class="howto" id="howto">
+  <div class="howto-box">
+    <div class="howto-title"><span>how_to_view.exe</span><a href="#" aria-label="close">x</a></div>
+    <div class="howto-body">
+      <h4>// HOW YOUR INSCRIPTION LIVES ON-CHAIN</h4>
+      <p>Your post is a permanent IQLabs code-in write to the Solana program 9KLLchQVJpGkw4jPuUmnvqESdR7mtNCYr3qS4iQLabs. The text or image is split into 4KB chunks committed in one transaction that references them; this viewer and the IQLabs gateway reassemble the row (kind, body, who).</p>
+      <h4 class="mt">// VERIFY IT ON SOLSCAN</h4>
+      <ol>
+        <li>Open the transaction with the button below.</li>
+        <li>You will see the code-in write to the IQLabs program, proof it is on chain forever.</li>
+        <li>Solscan shows the raw on-chain transaction; the readable text or image is reassembled from the 4KB chunks by this viewer and the IQLabs gateway.</li>
+      </ol>
+      <a class="howto-go" href="${explorerTxUrl}" target="_blank" rel="noopener">Go to Solscan</a>
+    </div>
+  </div>
+</div>
 
 </body>
 </html>`;
