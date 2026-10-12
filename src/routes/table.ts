@@ -279,6 +279,9 @@ async function fetchRowsCold(
     ? { json }
     : { json, rows, nextCursor, lastTimestamp: await fetchLastTimestamp(tablePda) };
   rowsCache.set(key, entry, ttl);
+  // A successful chain read starts the refresh window too. Otherwise the
+  // first cache hit immediately repeats the scan we just completed.
+  if (!before) lastRefresh.set(key, Date.now());
   if (rows.length > 0) setDiskCache("rows", key, json).catch(() => {});
   console.log(`[rows] ${tablePda.slice(0,8)} sigs=${signatures.length} rows=${rows.length}`);
 
@@ -553,6 +556,7 @@ tableRouter.get("/:feedPda/thread/:threadPda", async (c) => {
     });
     const entry: RowsCacheEntry = { json };
     rowsCache.set(key, entry, HEAD_TTL);
+    lastRefresh.set(key, Date.now());
     console.log(`[thread] ${threadPda.slice(0, 8)} op=${!!op} replies=${replies.length}`);
     return entry;
   }
@@ -703,6 +707,7 @@ tableRouter.get("/:tablePda/threads", async (c) => {
     // without waiting for the RPC to index its signature.
     const entry: RowsCacheEntry = { json, rows };
     rowsCache.set(key, entry, HEAD_TTL);
+    lastRefresh.set(key, Date.now());
     console.log(`[threads] ${tablePda.slice(0, 8)} rows=${rows.length} threads=${threads.length}`);
     return entry;
   }

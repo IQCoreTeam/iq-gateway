@@ -1,7 +1,10 @@
-import { beforeEach, describe, expect, mock, test } from "bun:test";
+import { beforeEach, describe, expect, mock, spyOn, test } from "bun:test";
 import { Keypair } from "@solana/web3.js";
 
 import "./helpers/cache-fixture";
+// Preserve the real pure decoder: Bun module mocks can affect barrel re-exports
+// used by the decoding suite in the same process. Only chain I/O is faked.
+import { decodeAssetData } from "../src/chain/solana/reader";
 
 // Feed anchors are rent-free signature anchors: getSignaturesForAddress works
 // on them but there is no Table account, so getTableMetaCached returns null.
@@ -35,7 +38,7 @@ mock.module("../src/chain/solana", () => ({
   readMultipleRows: async (sigs: string[]) => new Map(sigs.map((sig) => [sig, rowsBySig.get(sig) ?? null])),
   readSingleRow: async (sig: string) => rowsBySig.get(sig) ?? null,
   generateETag: () => "etag",
-  decodeAssetData: () => ({ data: null, metadata: null }),
+  decodeAssetData,
   detectImageType: () => "application/octet-stream",
   getRpcMetrics: () => ({ totalCalls: 0, rateLimited: 0, errors: 0, fallbacks: 0, heliusCalls: 0, heliusEnabled: false }),
   isHeliusEnabled: () => false,
@@ -46,7 +49,7 @@ mock.module("../src/chain/solana", () => ({
   getTableMetaCached: async () => null,
 }));
 
-const { tableRouter, rowsCache, indexCache, sliceCache, inflight } = await import("../src/routes/table");
+const { tableRouter, rowsCache, indexCache, sliceCache, inflight, lastRefresh } = await import("../src/routes/table");
 const { getDiskCache } = await import("../src/cache");
 const { createHash } = await import("node:crypto");
 
@@ -85,6 +88,7 @@ beforeEach(() => {
   indexCache.clear();
   sliceCache.clear();
   inflight.clear();
+  lastRefresh.clear();
 });
 
 describe("feed anchor (no Table account) cache refresh", () => {
@@ -102,8 +106,9 @@ describe("feed anchor (no Table account) cache refresh", () => {
     rowsBySig.set("sig-new", { __txSignature: "sig-new", value: "new" });
     signatureFetches = [];
 
-    // Head-page hit triggers the background refresh. With meta null it must
-    // fall through to the signature overlap scan instead of bailing.
+    lastRefresh.set(headKey(PDA, 3), Date.now() - 30_001);
+    // An eligible head-page hit triggers the background refresh. With null
+    // meta it must fall through to the signature overlap scan instead of bailing.
     const cached = await tableRouter.request(`/${PDA}/rows?limit=3`);
     expect(cached.status).toBe(200);
 
@@ -212,3 +217,47 @@ describe("feed anchor (no Table account) cache refresh", () => {
     expect((await promoted.json()).rows.map((r: Row) => r.__txSignature)).toEqual(["sig-a"]);
   });
 });
+
+// Exercise the real router and disk/memory caches over loopback HTTP. Only
+// chain reads are simulated: this suite never calls a public RPC or inscribes.
+for (const route of ["rows", "thread", "threads"] as const) {
+  test(`${route}: a freshly filled cache does not rescan during a concurrent burst`, async () => {
+    const pda = freshPda();
+    const path = route === "thread" ? `/${pda}/thread/${freshPda()}` : `/${pda}/${route}`;
+    const server = Bun.serve({ hostname: "127.0.0.1", port: 0, fetch: tableRouter.fetch });
+    const url = new URL(path, server.url);
+    const clock = spyOn(Date, "now");
+    const now = Date.now();
+    clock.mockReturnValue(now);
+    try {
+      const first = await fetch(url);
+      expect(first.status).toBe(200);
+      expect((await first.json()).cached).toBe(false);
+      const coldScans = signatureFetches.length;
+      expect(coldScans).toBe(route === "thread" ? 2 : 1);
+      const burst = await Promise.all(Array.from({ length: 20 }, () => fetch(url)));
+      for (const res of burst) {
+        expect(res.status).toBe(200);
+        expect((await res.json()).cached).toBe(true);
+      }
+      await waitFor(() => inflight.size === 0);
+      console.log(JSON.stringify({ route, coldScans, scansAfter20CacheHits: signatureFetches.length }));
+      expect(signatureFetches.length).toBe(coldScans);
+
+      // External writers still get discovered after the existing 30s window.
+      clock.mockReturnValue(now + 30_001);
+      const expiredBurst = await Promise.all(Array.from({ length: 20 }, () => fetch(url)));
+      await Promise.all(expiredBurst.map(res => res.arrayBuffer()));
+      await waitFor(() => inflight.size === 0);
+      expect(signatureFetches.length).toBe(coldScans * 2);
+
+      // Revalidation uses the same cached body and must not add chain reads.
+      const conditional = await fetch(url, { headers: { "If-None-Match": first.headers.get("etag")! } });
+      expect(conditional.status).toBe(304);
+      expect(signatureFetches.length).toBe(coldScans * 2);
+    } finally {
+      clock.mockRestore();
+      server.stop(true);
+    }
+  });
+}
