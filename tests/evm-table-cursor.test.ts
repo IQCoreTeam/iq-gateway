@@ -147,3 +147,15 @@ describe("/table/:dbRootId/:tableName/rows cursor", () => {
     expect(body.nextCursor).toBe(hash(4));
   });
 });
+
+for (const limit of [24, 7]) test(`notify updates cached head for limit ${limit}`, async () => {
+  history = [row(1)];
+  await app.request(`/${DB_ROOT}/notify-limit-${limit}/rows?limit=${limit}`);
+  const response = await app.request(`/${DB_ROOT}/notify-limit-${limit}/notify`, {
+    method:'POST', headers:{'content-type':'application/json'},
+    body:JSON.stringify({txHash:hash(900+limit),row:{kind:'text',body:'confirmed'}}),
+  });
+  expect(response.status).toBe(200);
+  const result = await (await app.request(`/${DB_ROOT}/notify-limit-${limit}/rows?limit=${limit}`)).json();
+  expect(result.rows.map(rowHash)).toContain(hash(900+limit));
+});
