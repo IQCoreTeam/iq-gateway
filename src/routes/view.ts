@@ -116,8 +116,10 @@ export function renderPage(sig: string, baseUrl: string, s: Screen, ogDesc: stri
 <meta property="og:title" content="IQLabs Inscription"/>
 <meta property="og:description" content="${escapeMarkup(ogDesc)}"/>
 <meta property="og:image" content="${baseUrl}/render/${sig}?v=${RENDER_REVISION}"/>
+<link rel="icon" href="${baseUrl}/favicon.ico" sizes="any"/>
+<link rel="icon" type="image/png" href="${baseUrl}/favicon.png"/>
 <style>
-@font-face{font-family:'UnifontEX';src:url('https://cdn.jsdelivr.net/gh/stgiga/UnifontEX@main/UnifontExMono.woff2') format('woff2'),url('https://cdn.jsdelivr.net/gh/stgiga/UnifontEX@main/UnifontExMono.woff') format('woff');font-display:swap}
+@font-face{font-family:'UnifontEX';src:url('${baseUrl}/fonts/unifont.woff2') format('woff2'),url('https://cdn.jsdelivr.net/gh/stgiga/UnifontEX@main/UnifontExMono.woff2') format('woff2');font-display:swap}
 *{margin:0;padding:0;box-sizing:border-box}
 html,body{height:100%}
 body{background:#070807;font-family:'UnifontEX','Unifont','GNU Unifont',monospace;font-size:16px;line-height:1.25;color:#bfe8bf;-webkit-font-smoothing:none;display:grid;grid-template-rows:minmax(0,1fr)}
