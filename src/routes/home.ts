@@ -96,7 +96,6 @@ const HTML = `<!doctype html>
   .pre-code {
     background: var(--bg-alt);
     border: 1px solid var(--rule);
-    border-left: 2px solid var(--green);
     padding: 12px 14px;
     margin: 12px 0;
     overflow-x: auto;
