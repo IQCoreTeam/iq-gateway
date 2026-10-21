@@ -1,21 +1,18 @@
 import { describe, expect, test } from "bun:test";
 import { Resvg } from "@resvg/resvg-js";
 import { generateSvg } from "../src/routes/render";
-import { renderHtmlPage } from "../src/routes/view";
+import { textScreen, renderPage } from "../src/routes/view";
 
 const sig = "4GA2pXVF79sWUXbygXyWhop5Rs5mBc3cq7S1Vv7VJSHroskpsdCjgcsYENdhRHPNyH3w5AESSow2nDFE5sxRMMD8";
+const BASE = "https://gateway.iqlabs.dev";
 
-describe("inscription branding", () => {
-  test("HTML logos are self-contained and text remains escaped", () => {
-    const html = renderHtmlPage("<script>alert(1)</script>", sig, "https://gateway.iqlabs.dev");
-    const images = [...html.matchAll(/<img[^>]+src="([^"]+)"/g)];
-    expect(images.length).toBe(2);
-    for (const [, src] of images) {
-      expect(src).toMatch(/^data:image\/(svg\+xml|png);base64,/);
-      expect(Buffer.from(src.split(",")[1], "base64").length).toBeGreaterThan(1000);
-    }
+describe("inscription console", () => {
+  test("page escapes inscription content and readout, never injects markup", () => {
+    const screen = { kind: "TEXT", size: "25 B", who: "<b>x</b>", top: true, html: textScreen("<script>alert(1)</script>") };
+    const html = renderPage(sig, BASE, screen, "og");
     expect(html).not.toContain("<script>alert(1)</script>");
-    expect(html).toContain("&lt;script&gt;");
+    expect(html).toContain("&lt;script&gt;"); // body escaped
+    expect(html).toContain("&lt;b&gt;x&lt;/b&gt;"); // readout value escaped
   });
 
   test("resvg paints both bundled logos into the actual PNG", () => {
@@ -41,15 +38,23 @@ describe("inscription branding", () => {
 });
 
 describe("inscription layout", () => {
-  test("keeps ASCII indentation and lines intact while prose can wrap", async () => {
+  const art = "    .-@@@@-.\n    |  안녕 |\n    '------'";
+
+  test("solana console: ascii keeps indentation in a <pre>, prose wraps", () => {
+    const ascii = textScreen(art);
+    expect(ascii).toContain("<pre>");
+    expect(ascii).toContain("    .-@@@@-.\n    |  안녕 |");
+    const prose = textScreen("Hello friend.\nThis is normal prose.");
+    expect(prose).toContain('class="v-text"');
+    expect(prose).not.toContain("<pre>");
+  });
+
+  test("evm viewer: ascii stays preformatted while prose can wrap", async () => {
     const { renderHtmlPage: renderEvm } = await import("../src/routes/evm/view");
-    for (const render of [renderHtmlPage, renderEvm]) {
-      const art = "    .-@@@@-.\n    |  안녕 |\n    '------'";
-      const html = render(art, sig, "https://gateway.iqlabs.dev");
-      expect(html).toContain(' preformatted" tabindex="0"');
-      expect(html).toContain("    .-@@@@-.\n    |  안녕 |");
-      const prose = render("Hello friend.\nThis is normal prose.", sig, "https://gateway.iqlabs.dev");
-      expect(prose).not.toContain(' preformatted" tabindex="0"');
-    }
+    const html = renderEvm(art, sig, BASE, `https://solscan.io/tx/${sig}`);
+    expect(html).toContain(' preformatted" tabindex="0"');
+    expect(html).toContain("    .-@@@@-.\n    |  안녕 |");
+    const prose = renderEvm("Hello friend.\nThis is normal prose.", sig, BASE, `https://solscan.io/tx/${sig}`);
+    expect(prose).not.toContain(' preformatted" tabindex="0"');
   });
 });

@@ -67,7 +67,7 @@ function nftScreen(meta: Record<string, unknown>): string {
   return `<div class="v-nft">${image}<div><div>${name}</div><div class="dim">${sub}</div>${attrs ? `<div class="v-attrs">${attrs}</div>` : ""}</div></div>`;
 }
 
-const textScreen = (text: string): string =>
+export const textScreen = (text: string): string =>
   isPreformattedText(text) ? `<pre>${escapeMarkup(text)}</pre>` : `<div class="v-text">${escapeMarkup(text)}</div>`;
 
 function screenFor(sig: string, baseUrl: string, buf: Buffer): Screen {
