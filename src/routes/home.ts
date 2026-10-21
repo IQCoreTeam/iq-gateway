@@ -9,7 +9,10 @@ const HTML = `<!doctype html>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>iq labs gateway</title>
+<link rel="icon" href="/favicon.ico" sizes="any">
+<link rel="icon" type="image/png" href="/favicon.png">
 <style>
+  @font-face{font-family:'UnifontEX';src:url('/fonts/unifont.woff2') format('woff2'),url('https://cdn.jsdelivr.net/gh/stgiga/UnifontEX@main/UnifontExMono.woff2') format('woff2');font-display:swap}
   :root {
     --bg: #000;
     --bg-alt: #050505;
@@ -28,7 +31,8 @@ const HTML = `<!doctype html>
     margin: 0;
     background: var(--bg);
     color: var(--fg);
-    font-family: ui-monospace, "JetBrains Mono", "SF Mono", "DejaVu Sans Mono", Menlo, monospace;
+    font-family: 'UnifontEX', 'Unifont', 'GNU Unifont', monospace;
+    -webkit-font-smoothing: none;
     font-size: 14px;
     line-height: 1.55;
     padding: 32px 24px 96px;
