@@ -145,7 +145,7 @@ button{font:inherit;color:inherit;cursor:pointer}
 .screen.top{align-items:flex-start;justify-content:flex-start}
 .screen pre{font:inherit;color:inherit;white-space:pre-wrap;word-break:break-all;overflow-wrap:anywhere;max-width:100%}
 .screen::-webkit-scrollbar,.log::-webkit-scrollbar{width:16px;height:16px}
-.screen::-webkit-scrollbar-track,.log::-webkit-scrollbar-track{background:#0c1f0f;border-left:2px solid #090a09}
+.screen::-webkit-scrollbar-track,.log::-webkit-scrollbar-track{background:#151515;border-left:2px solid #090a09}
 .screen::-webkit-scrollbar-thumb,.log::-webkit-scrollbar-thumb{background:linear-gradient(#4a4f4a,#2e322e);border:2px solid;border-color:#6a706a #0f100f #0f100f #6a706a}
 .msgbar{display:grid;grid-template-columns:minmax(0,1fr);gap:8px}
 .msg{display:flex;align-items:center;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;min-height:36px}
