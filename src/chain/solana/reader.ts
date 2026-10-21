@@ -404,3 +404,19 @@ export async function readMultipleRows(
 
   return results;
 }
+
+/**
+ * A code-in feed row is JSON shaped like {"kind","body","who"}. Parse that
+ * envelope out of decoded inscription bytes. Returns null for raw bytes or
+ * non-record JSON (e.g. NFT metadata), so callers fall back. One source of
+ * truth for the envelope shape, shared by the /img and /view routes.
+ */
+export interface CodeInRecord { kind?: string; body?: string; who?: string; [k: string]: unknown; }
+export function parseRecord(buf: Buffer): CodeInRecord | null {
+  if (!/^\s*\{/.test(buf.subarray(0, 64).toString("utf8"))) return null;
+  try {
+    const o = JSON.parse(buf.toString("utf8"));
+    if (o && typeof o === "object" && ("kind" in o || "body" in o || "who" in o)) return o as CodeInRecord;
+  } catch { /* not a record */ }
+  return null;
+}

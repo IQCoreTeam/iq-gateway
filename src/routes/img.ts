@@ -1,5 +1,5 @@
 import { Hono } from "hono";
-import { readAsset, generateETag, decodeAssetData, detectImageType } from "../chain/solana";
+import { readAsset, generateETag, decodeAssetData, detectImageType, parseRecord } from "../chain/solana";
 import { imageCache, TTL, getDiskCache, setDiskCache } from "../cache";
 
 export const imgRouter = new Hono();
@@ -38,24 +38,21 @@ imgRouter.get("/:sig", async (c) => {
     }
   }
 
-  // Code-In table rows wrap images in JSON. Normalize here (not in the
-  // shared asset decoder), including old memory/disk entries containing JSON.
+  // Code-In rows wrap images in a {kind,body,who} envelope. Unwrap via the
+  // shared parser (also covers old memory/disk entries containing the JSON).
   // Existing standalone images never enter this path.
-  if (/^\s*\{/.test(buf.subarray(0, 64).toString("utf8"))) {
-    let row;
-    try { row = JSON.parse(buf.toString("utf8")); } catch { /* legacy data */ }
-    if ((row?.kind === "image" || row?.kind === "file") && typeof row.body === "string") {
-      const match = /^data:(image\/(?:png|jpeg|gif|webp))(?:;[^,]*)?;base64,([A-Za-z0-9+/]+={0,2})$/i.exec(row.body);
-      if (match) {
-        const decoded = Buffer.from(match[2], "base64");
-        // Reject malformed base64 and mislabeled/non-image bodies. Do not
-        // introduce active SVG/HTML support through the new row format.
-        if (decoded.toString("base64").replace(/=+$/, "") === match[2].replace(/=+$/, "") &&
-            detectImageType(decoded) === match[1].toLowerCase()) {
-          buf = decoded;
-          imageCache.set(cacheKey, buf, TTL.IMAGE);
-          await setDiskCache("img", sig, buf);
-        }
+  const row = parseRecord(buf);
+  if (row && (row.kind === "image" || row.kind === "file") && typeof row.body === "string") {
+    const match = /^data:(image\/(?:png|jpeg|gif|webp))(?:;[^,]*)?;base64,([A-Za-z0-9+/]+={0,2})$/i.exec(row.body);
+    if (match) {
+      const decoded = Buffer.from(match[2], "base64");
+      // Reject malformed base64 and mislabeled/non-image bodies. Do not
+      // introduce active SVG/HTML support through the new row format.
+      if (decoded.toString("base64").replace(/=+$/, "") === match[2].replace(/=+$/, "") &&
+          detectImageType(decoded) === match[1].toLowerCase()) {
+        buf = decoded;
+        imageCache.set(cacheKey, buf, TTL.IMAGE);
+        await setDiskCache("img", sig, buf);
       }
     }
   }
