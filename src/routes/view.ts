@@ -1,7 +1,7 @@
 import { Hono } from "hono";
 import { readAsset, generateETag, decodeAssetData, detectImageType, parseRecord } from "../chain/solana";
 import { isPreformattedText } from "../inscription-layout";
-import { RENDER_REVISION } from "../branding";
+import { RENDER_REVISION, SOLANA_INTERNET_LOGO } from "../branding";
 import { imageCache, TTL, getDiskCache, setDiskCache } from "../cache";
 import { escapeMarkup } from "./render";
 
@@ -149,7 +149,8 @@ button{font:inherit;color:inherit;cursor:pointer}
 .screen::-webkit-scrollbar-thumb,.log::-webkit-scrollbar-thumb{background:linear-gradient(#4a4f4a,#2e322e);border:2px solid;border-color:#6a706a #0f100f #0f100f #6a706a}
 .msgbar{display:grid;grid-template-columns:minmax(0,1fr);gap:8px}
 .msg{display:flex;align-items:center;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;min-height:36px}
-.plate{height:64px;display:flex;align-items:center;justify-content:center;font-size:32px}
+.plate{height:64px;display:flex;align-items:center;justify-content:center;font-size:32px;padding:6px}
+.plate-logo{height:46px;max-width:100%;object-fit:contain;filter:drop-shadow(0 0 6px rgba(65,255,0,.5))}
 .led{width:10px;height:10px;background:#41ff00;box-shadow:0 0 6px #41ff00;display:inline-block;margin-right:8px;vertical-align:-1px}
 .v-img{max-width:100%;max-height:100%;image-rendering:pixelated;border:2px solid #1f5a24;display:block}
 .v-text{white-space:pre-wrap;word-break:break-word;overflow-wrap:anywhere;max-width:60ch}
@@ -189,7 +190,7 @@ button{font:inherit;color:inherit;cursor:pointer}
   </div>
 
   <div class="rail right">
-    <div class="plate">IQ</div>
+    <div class="plate"><img class="plate-logo" src="${SOLANA_INTERNET_LOGO}" alt="Solana Internet"/></div>
     <div class="lcd"><div class="row"><span><span class="led"></span>ON-CHAIN</span><span>OK</span></div><div class="row"><span>VIEWER</span><span>v2</span></div></div>
     <div class="badge">SOL INTERNET</div>
     <div class="lcd log">
