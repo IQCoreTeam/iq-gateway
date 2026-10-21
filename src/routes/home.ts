@@ -57,12 +57,11 @@ const HTML = `<!doctype html>
     text-transform: uppercase;
     letter-spacing: 0.1em;
     color: var(--green);
-    text-shadow: var(--glow);
     border-bottom: 1px dashed var(--rule);
     padding-bottom: 6px;
     font-weight: 600;
   }
-  h2 .num { color: var(--fg-faint); margin-right: 8px; }
+  h2 .num { color: var(--green); margin-right: 8px; }
 
   p { margin: 8px 0 12px; max-width: 720px; }
   p strong { color: var(--green); font-weight: 600; }
