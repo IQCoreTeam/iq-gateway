@@ -68,6 +68,7 @@ const HTML = `<!doctype html>
   p strong { color: var(--green); font-weight: 600; }
   a { color: var(--green); text-decoration: underline; text-decoration-color: var(--rule); }
   a:hover { text-decoration-color: var(--green); }
+  code, pre { font-family: inherit; }
   code { color: var(--green); }
 
   table.kv {
