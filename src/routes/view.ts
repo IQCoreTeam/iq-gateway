@@ -141,7 +141,7 @@ button{font:inherit;color:inherit;cursor:pointer}
 .key:hover{color:#fff;background:linear-gradient(#565b56,#383c38)}
 .key:active{border-color:#0f100f #6a706a #6a706a #0f100f;transform:translateY(2px);box-shadow:none}
 .center{display:grid;grid-template-rows:minmax(0,1fr) auto;gap:8px;min-height:0;min-width:0}
-.screen{min-width:min(720px,calc(100vw - 560px));min-height:min(560px,calc(100vh - 220px));background:#050705;border:3px solid;border-color:#090a09 #4a4f4a #4a4f4a #090a09;box-shadow:inset 0 0 28px rgba(0,0,0,.9);padding:clamp(12px,3vw,24px);overflow-x:hidden;overflow-y:auto;color:#41ff00;text-shadow:0 0 4px rgba(65,255,0,.5);background-image:repeating-linear-gradient(0deg,rgba(65,255,0,.05) 0 1px,transparent 1px 3px);display:flex;align-items:center;justify-content:center;container-type:inline-size}
+.screen{min-width:min(900px,calc(100vw - 540px));min-height:min(560px,calc(100vh - 220px));background:#050705;border:3px solid;border-color:#090a09 #4a4f4a #4a4f4a #090a09;box-shadow:inset 0 0 28px rgba(0,0,0,.9);padding:clamp(12px,3vw,24px);overflow-x:hidden;overflow-y:auto;color:#41ff00;text-shadow:0 0 4px rgba(65,255,0,.5);background-image:repeating-linear-gradient(0deg,rgba(65,255,0,.05) 0 1px,transparent 1px 3px);display:flex;align-items:center;justify-content:center;container-type:inline-size}
 .screen.top{align-items:flex-start;justify-content:flex-start}
 .screen pre{font:inherit;color:inherit;white-space:pre-wrap;word-break:break-all;overflow-wrap:anywhere;max-width:100%}
 .screen::-webkit-scrollbar,.log::-webkit-scrollbar{width:16px;height:16px}
