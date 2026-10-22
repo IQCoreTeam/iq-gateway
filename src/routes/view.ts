@@ -165,16 +165,22 @@ button{font:inherit;color:inherit;cursor:pointer}
 .v-img{max-width:100%;max-height:100%;image-rendering:pixelated;border:2px solid #1f5a24;display:block}
 .v-text{white-space:pre-wrap;word-break:break-word;overflow-wrap:anywhere;max-width:60ch}
 .dim{color:#3fc24c}
-.v-file,.v-coin{display:grid;gap:12px;justify-items:center;text-align:center}
+.v-file,.v-coin{display:grid;gap:12px;justify-items:center;text-align:center;min-width:0;max-width:100%;overflow-wrap:anywhere}
 .v-sym{font-size:48px;line-height:1}
 .v-nft{display:flex;gap:18px;align-items:flex-start;flex-wrap:wrap;width:100%}
-.v-nftimg{width:160px;height:160px;flex:0 0 auto;border:2px solid #1f5a24;image-rendering:pixelated}
+.v-nft>div{min-width:0;flex:1 1 180px;overflow-wrap:anywhere}
+.v-nftimg{max-width:100%;object-fit:contain;width:160px;height:160px;flex:0 0 auto;border:2px solid #1f5a24;image-rendering:pixelated}
 .v-attrs{display:grid;grid-template-columns:repeat(auto-fill,minmax(150px,1fr));gap:6px;margin-top:12px}
-.v-attr{display:flex;justify-content:space-between;gap:8px;border:2px solid #1f5a24;padding:4px 8px}
+.v-attr{display:flex;flex-wrap:wrap;justify-content:space-between;gap:8px;min-width:0;overflow-wrap:anywhere;border:2px solid #1f5a24;padding:4px 8px}
 .deck{display:grid;grid-template-columns:auto minmax(0,1fr);gap:18px;width:100%;max-width:640px;align-items:start}
 .cover{width:160px;height:160px;border:2px solid #1f5a24;background:repeating-linear-gradient(45deg,#0c1f0f 0 6px,#071209 6px 12px);display:flex;align-items:flex-end;padding:6px;color:#3fc24c}
 @container (max-width:480px){.deck{grid-template-columns:minmax(0,1fr)}.cover{width:128px;height:128px}}
 @media (max-width:1265px){body{display:block}.frame{height:auto;padding:8px}.well{height:auto;width:100%}.console{height:auto;width:100%;grid-template-columns:minmax(0,1fr)}.screen{min-width:0;min-height:300px;max-height:70vh}.rail.right,.rail.left{grid-template-rows:none}.badge,#status{display:none}.log{max-height:160px}}
+@media (max-width:560px){
+.console{padding:8px;gap:8px}
+.key{min-height:44px;display:flex;align-items:center;justify-content:center;overflow-wrap:anywhere}
+.v-img{max-height:70svh;object-fit:contain}.v-nftimg{height:auto;aspect-ratio:1}
+}
 </style>
 </head>
 <body>
