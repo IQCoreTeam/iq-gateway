@@ -130,7 +130,7 @@ a{color:#7dff7f}a:hover{color:#d6ffd6}
 button{font:inherit;color:inherit;cursor:pointer}
 .console{width:auto;height:auto;max-width:100%;max-height:100%;min-height:0;min-width:0;background:linear-gradient(180deg,#3a3e3a 0%,#2b2e2b 60%,#232623 100%);border:3px solid;border-color:#5e635e #101110 #101110 #5e635e;padding:10px;display:grid;grid-template-columns:232px minmax(0,1fr) 232px;grid-template-rows:minmax(0,1fr);gap:10px}
 .rail{display:grid;gap:8px;align-content:start;min-height:0}
-.rail.left{grid-template-rows:auto auto auto auto minmax(0,1fr)}
+.rail.left{grid-template-rows:auto auto minmax(0,1fr)}
 .rail.right{grid-template-rows:auto auto auto minmax(0,1fr)}
 .log{overflow:auto;align-content:start;min-height:0}
 .log div{color:#3fc24c;word-break:break-word}.log div b{font-weight:normal;color:#5dff6a}
@@ -142,6 +142,14 @@ button{font:inherit;color:inherit;cursor:pointer}
 .key,.badge{color:#e4f2e4;text-decoration:none;background:linear-gradient(#4a4f4a,#2e322e);border:2px solid;border-color:#6a706a #0f100f #0f100f #6a706a;box-shadow:0 2px 0 #000;display:block;text-align:center;padding:6px 8px}
 .key:hover{color:#fff;background:linear-gradient(#565b56,#383c38)}
 .key:active{border-color:#0f100f #6a706a #6a706a #0f100f;transform:translateY(2px);box-shadow:none}
+.keys{display:flex;gap:6px}.keys .key{flex:1;padding:6px 2px}
+.about{position:fixed;inset:0;z-index:50;background:rgba(5,7,5,.78);display:none;align-items:center;justify-content:center;padding:20px}
+.about.open{display:flex}
+.aboutbox{width:460px;max-width:100%;background:linear-gradient(180deg,#3a3e3a,#232623);border:3px solid;border-color:#5e635e #101110 #101110 #5e635e;box-shadow:0 8px 0 #000}
+.abouthead{display:flex;align-items:center;justify-content:space-between;color:#5dff6a;padding:8px 10px;border-bottom:2px solid #090a09}
+.aboutx{background:none;border:none;color:#5dff6a}
+.aboutbody{padding:16px;color:#bfe8bf;display:grid;gap:8px}
+.aboutbody b{color:#5dff6a}
 .center{display:grid;grid-template-rows:minmax(0,1fr) auto;gap:8px;min-height:0;min-width:0}
 .screen{min-width:min(700px,calc(100vw - 600px));min-height:min(560px,calc(100vh - 220px));background:#050705;border:3px solid;border-color:#090a09 #4a4f4a #4a4f4a #090a09;box-shadow:inset 0 0 28px rgba(0,0,0,.9);padding:clamp(12px,3vw,24px);overflow-x:hidden;overflow-y:auto;color:#41ff00;text-shadow:0 0 4px rgba(65,255,0,.5);background-image:repeating-linear-gradient(0deg,rgba(65,255,0,.05) 0 1px,transparent 1px 3px);display:flex;align-items:center;justify-content:center;container-type:inline-size}
 .screen.top{align-items:flex-start;justify-content:flex-start}
@@ -150,7 +158,7 @@ button{font:inherit;color:inherit;cursor:pointer}
 .screen::-webkit-scrollbar-track,.log::-webkit-scrollbar-track{background:#151515;border-left:2px solid #090a09}
 .screen::-webkit-scrollbar-thumb,.log::-webkit-scrollbar-thumb{background:linear-gradient(#4a4f4a,#2e322e);border:2px solid;border-color:#6a706a #0f100f #0f100f #6a706a}
 .msgbar{display:grid;grid-template-columns:minmax(0,1fr);gap:8px}
-.msg{display:flex;align-items:center;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;min-height:36px}
+.msg{display:block;line-height:24px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;height:36px}
 .plate{height:64px;display:flex;align-items:center;justify-content:center;font-size:32px;padding:6px}
 .plate-logo{height:46px;max-width:100%;object-fit:contain;filter:drop-shadow(0 0 6px rgba(65,255,0,.5))}
 .led{width:10px;height:10px;background:#41ff00;box-shadow:0 0 6px #41ff00;display:inline-block;margin-right:8px;vertical-align:-1px}
@@ -166,7 +174,7 @@ button{font:inherit;color:inherit;cursor:pointer}
 .deck{display:grid;grid-template-columns:auto minmax(0,1fr);gap:18px;width:100%;max-width:640px;align-items:start}
 .cover{width:160px;height:160px;border:2px solid #1f5a24;background:repeating-linear-gradient(45deg,#0c1f0f 0 6px,#071209 6px 12px);display:flex;align-items:flex-end;padding:6px;color:#3fc24c}
 @container (max-width:480px){.deck{grid-template-columns:minmax(0,1fr)}.cover{width:128px;height:128px}}
-@media (max-width:1265px){body{display:block}.frame{height:auto;padding:8px}.well{height:auto;width:100%}.console{height:auto;width:100%;grid-template-columns:minmax(0,1fr)}.screen{min-width:0;min-height:360px}.rail.right,.rail.left{grid-template-rows:none}.log{max-height:160px}}
+@media (max-width:1265px){body{display:block}.frame{height:auto;padding:8px}.well{height:auto;width:100%}.console{height:auto;width:100%;grid-template-columns:minmax(0,1fr)}.screen{min-width:0;min-height:300px;max-height:70vh}.rail.right,.rail.left{grid-template-rows:none}.badge,#status{display:none}.log{max-height:160px}}
 </style>
 </head>
 <body>
@@ -181,9 +189,11 @@ button{font:inherit;color:inherit;cursor:pointer}
       <div class="row"><span>WHO</span><span>${escapeMarkup(s.who)}</span></div>
       <div class="row"><span>NET</span><span>SOLANA</span></div>
     </div>
-    <button class="key" id="k-how">HOW TO CHECK MY DATA</button>
-    <a class="key" href="${explorerTxUrl}" target="_blank" rel="noopener">VIEW ON EXPLORER</a>
-    <button class="key" id="k-post">POST THIS</button>
+    <div class="keys">
+      <button class="key" id="k-how">ABOUT</button>
+      <a class="key" href="${explorerTxUrl}" target="_blank" rel="noopener">EXP</a>
+      <button class="key" id="k-post">POST</button>
+    </div>
   </div>
 
   <div class="center">
@@ -193,7 +203,7 @@ button{font:inherit;color:inherit;cursor:pointer}
 
   <div class="rail right">
     <div class="plate"><img class="plate-logo" src="${SOLANA_INTERNET_LOGO}" alt="Solana Internet"/></div>
-    <div class="lcd"><div class="row"><span><span class="led"></span>ON-CHAIN</span><span>OK</span></div><div class="row"><span>VIEWER</span><span>v2</span></div></div>
+    <div class="lcd" id="status"><div class="row"><span><span class="led"></span>ON-CHAIN</span><span>OK</span></div><div class="row"><span>VIEWER</span><span>v2</span></div></div>
     <div class="badge">SOL INTERNET</div>
     <div class="lcd log">
       <div><b>&gt;</b> fetch tx ${escapeMarkup(shortSig)} via rpc</div>
@@ -205,11 +215,26 @@ button{font:inherit;color:inherit;cursor:pointer}
 </div>
 </div>
 </div>
+<div class="about" id="about">
+  <div class="aboutbox">
+    <div class="abouthead"><span>HOW TO CHECK MY DATA</span><button class="aboutx" id="aboutx">[ X ]</button></div>
+    <div class="aboutbody">
+      <p>This page is only a convenience viewer. Your data lives on Solana, not here.</p>
+      <p><b>&gt;</b> Fetch this transaction by its signature from any RPC.</p>
+      <p><b>&gt;</b> Decode the body with the IQ SDK. No HTTP, no gateway needed.</p>
+      <p><b>&gt;</b> The gateway just reads the same chain and renders it for you.</p>
+    </div>
+  </div>
+</div>
 <script>
 (function(){
-  var msg=document.getElementById('msg'),DEF=msg.textContent;
-  var how=document.getElementById('k-how');
-  if(how)how.onclick=function(){msg.textContent=msg.textContent.indexOf('fetch tx by sig')>=0?DEF:'> fetch tx by sig from any rpc, decode the body with the IQ SDK. no http.';};
+  var msg=document.getElementById('msg');
+  var about=document.getElementById('about'),how=document.getElementById('k-how');
+  function closeAbout(){about.classList.remove('open');}
+  if(how)how.onclick=function(){about.classList.add('open');};
+  document.getElementById('aboutx').onclick=closeAbout;
+  about.onclick=function(e){if(e.target===about)closeAbout();};
+  document.addEventListener('keydown',function(e){if(e.key==='Escape')closeAbout();});
   var post=document.getElementById('k-post');
   if(post)post.onclick=function(){if(navigator.clipboard)navigator.clipboard.writeText(location.href).then(function(){msg.textContent='> link copied. post it anywhere.';},function(){msg.textContent='> '+location.href;});else msg.textContent='> '+location.href;};
 })();
