@@ -175,14 +175,6 @@ button{font:inherit;color:inherit;cursor:pointer}
 .cover{width:160px;height:160px;border:2px solid #1f5a24;background:repeating-linear-gradient(45deg,#0c1f0f 0 6px,#071209 6px 12px);display:flex;align-items:flex-end;padding:6px;color:#3fc24c}
 @container (max-width:480px){.deck{grid-template-columns:minmax(0,1fr)}.cover{width:128px;height:128px}}
 @media (max-width:1265px){body{display:block}.frame{height:auto;padding:8px}.well{height:auto;width:100%}.console{height:auto;width:100%;grid-template-columns:minmax(0,1fr)}.screen{min-width:0;min-height:300px;max-height:70vh}.rail.right,.rail.left{grid-template-rows:none}.badge,#status{display:none}.log{max-height:160px}}
-@media (max-width:560px){
-.key{min-height:44px;display:flex;align-items:center;justify-content:center;overflow-wrap:anywhere}
-.v-file,.v-coin{min-width:0;max-width:100%;overflow-wrap:anywhere}
-.v-nft>div{min-width:0;flex:1 1 180px;overflow-wrap:anywhere}
-.v-nftimg{max-width:100%;object-fit:contain}
-.v-attr{flex-wrap:wrap;min-width:0;overflow-wrap:anywhere}
-.v-img{max-height:70svh;object-fit:contain}
-}
 </style>
 </head>
 <body>
