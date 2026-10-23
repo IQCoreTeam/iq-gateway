@@ -1,0 +1,28 @@
+{
+  "scope": "Browser viewport QA using actual BlockChan picker/read adapter/attachment renderer and actual gateway media handler, with loopback synthetic rows and generated WAV/WebM. Not real wallet inventory or a new onchain write.",
+  "gatewayBase": "45cb0ad3375394b252be47418361571ec3c33ea4",
+  "blockchanBase": "0b7a981badf787b1576eb14f5609622401861c96",
+  "checks": {
+    "gatewayTests": 161,
+    "blockchanTests": 103,
+    "typecheck": "both pass",
+    "productionBuild": "both pass",
+    "phoneWidth": 390,
+    "phoneDocumentWidth": 390,
+    "audioDuration": 3,
+    "audioEnded": true,
+    "videoDuration": 2,
+    "videoPlaybackStarted": true,
+    "audioFullStatus": 200,
+    "audioRangeStatus": 206,
+    "audioRange": "bytes0-43/144044"
+  },
+  "readBudget": "Existing inventory requests retained: Solana assets+slice; bounded EVM feed pages. Audio/video tiles do not fetch payloads. Local media handler reuses cached bytes for full/range reads. No RPC in this browser fixture.",
+  "productionLimits": [
+    "Deploy gateway32 before enabling tx-reference media in client",
+    "No physical-phone, deployed endpoint, mainnet or real wallet inventory acceptance claimed",
+    "8MiB encoded cap follows reconstruction; prereconstruction resource limits separate"
+  ],
+  "design": "Gateway viewer.ts is byte-for-byte upstream; no extra CSS",
+  "remoteActions": "None; SDK/SolChat local"
+}
