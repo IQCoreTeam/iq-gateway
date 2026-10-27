@@ -42,7 +42,13 @@ const meta = (lastTimestamp: number): Meta => ({
   gate: null,
 });
 
+// mock.module replaces this module for every test file that loads later in the
+// same bun process, so keep every real export reachable and override only the
+// reads this file controls. A partial object breaks later importers of other
+// names (e.g. routes/view's parseRecord) depending on file order.
+const solanaChain = await import("../src/chain/solana");
 mock.module("../src/chain/solana", () => ({
+  ...solanaChain,
   readAsset: async () => null,
   listUserAssets: async () => [],
   listUserSessions: async () => [],

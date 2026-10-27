@@ -22,7 +22,11 @@ let signatures: string[] = [];
 let rowsBySig = new Map<string, Row>();
 let signatureFetches: Array<{ limit: number; before?: string }> = [];
 
+// Process-wide mock: spread the real module so later test files still find
+// every export (see table-cache.test.ts).
+const solanaChain = await import("../src/chain/solana");
 mock.module("../src/chain/solana", () => ({
+  ...solanaChain,
   readAsset: async () => null,
   listUserAssets: async () => [],
   listUserSessions: async () => [],
