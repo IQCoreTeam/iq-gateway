@@ -25,6 +25,7 @@
     "dotenv": "^17.2.3",
     "ethers": "^6.16.0",
     "hono": "^4.13.8",
+    "sharp": "0.35.5",
     "swagger-ui-dist": "^5.32.6"
   },
   "devDependencies": {

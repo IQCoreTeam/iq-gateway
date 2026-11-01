@@ -4,12 +4,7 @@ import { imageCache, TTL, getDiskCache, setDiskCache } from "../cache";
 
 export const imgRouter = new Hono();
 
-imgRouter.get("/:sig", async (c) => {
-  let sig = c.req.param("sig");
-  if (sig.endsWith(".png")) sig = sig.slice(0, -4);
-  if (sig.endsWith(".jpg")) sig = sig.slice(0, -4);
-  if (!sig || sig.length < 80) return c.text("invalid signature", 400);
-
+export async function readInscribedImage(sig: string): Promise<Buffer> {
   const cacheKey = `img:${sig}`;
 
   // Check caches
@@ -23,19 +18,11 @@ imgRouter.get("/:sig", async (c) => {
   }
 
   if (!buf) {
-    try {
-      const { data } = await readAsset(sig);
-      if (!data) return c.text("not found", 404);
-
-      buf = decodeAssetData(data);
-
-      imageCache.set(cacheKey, buf, TTL.IMAGE);
-      await setDiskCache("img", sig, buf);
-    } catch (e: unknown) {
-      const msg = e instanceof Error ? e.message : "unknown error";
-      console.error("img fetch error:", msg);
-      return c.text("failed to fetch", 500);
-    }
+    const { data } = await readAsset(sig);
+    if (!data) throw new Error("image inscription not found");
+    buf = decodeAssetData(data);
+    imageCache.set(cacheKey, buf, TTL.IMAGE);
+    await setDiskCache("img", sig, buf);
   }
 
   // Code-In rows wrap images in a {kind,body,who} envelope. Unwrap via the
@@ -55,6 +42,25 @@ imgRouter.get("/:sig", async (c) => {
         await setDiskCache("img", sig, buf);
       }
     }
+  }
+
+  return buf;
+}
+
+imgRouter.get("/:sig", async (c) => {
+  let sig = c.req.param("sig");
+  if (sig.endsWith(".png")) sig = sig.slice(0, -4);
+  if (sig.endsWith(".jpg")) sig = sig.slice(0, -4);
+  if (!sig || sig.length < 80) return c.text("invalid signature", 400);
+
+  let buf: Buffer;
+  try { buf = await readInscribedImage(sig); }
+  catch (e: unknown) {
+    const msg = e instanceof Error ? e.message : "unknown error";
+    if (msg === "image inscription not found") return c.text("not found", 404);
+    if (msg.includes("abort")) return c.text("timeout", 504);
+    console.error("img fetch error:", msg);
+    return c.text("failed to fetch", 500);
   }
 
   const contentType = detectImageType(buf) || "image/png";

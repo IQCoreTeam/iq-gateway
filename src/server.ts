@@ -1,3 +1,4 @@
+import { faviconRouter } from "./routes/favicon";
 import "dotenv/config";
 import { Hono } from "hono";
 import { cors } from "hono/cors";
@@ -63,6 +64,7 @@ initChain();
 const app = new Hono<{ Variables: { chain?: EvmWrapper; network?: string } }>();
 app.use("*", cors());
 app.use("*", logger());
+app.route("/", faviconRouter);
 
 const port = Number(process.env.PORT) || 3000;
 
