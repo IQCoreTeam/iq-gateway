@@ -1,6 +1,8 @@
 import { IQ_LOGO, SOLANA_INTERNET_LOGO, RENDER_REVISION } from "../branding";
 import { Hono } from "hono";
-import { readAsset, generateETag, decodeAssetData, detectImageType } from "../chain/solana";
+import { generateETag, detectImageType } from "../chain/solana";
+import { readInscribedImage } from "./img";
+import sharp from "sharp";
 import { imageCache, TTL, getDiskCache, setDiskCache } from "../cache";
 
 export const renderRouter = new Hono();
@@ -211,16 +213,25 @@ renderRouter.get("/:sig", async (c) => {
 
   if (!buf) {
     try {
-      const { data } = await readAsset(sig);
-      if (!data) return c.text("not found", 404);
-
-      const decoded = decodeAssetData(data);
-      if (detectImageType(decoded)) return c.redirect(`/img/${sig}`, 302);
-      const text = decoded.toString("utf-8");
-
-      const svg = generateSvg(text, sig);
-
-      if (isPng) {
+      let decoded = await readInscribedImage(sig);
+      // NFT metadata may point to an IQ image inscription. Resolve only its
+      // signature through the existing cache; never fetch arbitrary image URLs.
+      if (!detectImageType(decoded)) {
+        try {
+          const meta = JSON.parse(decoded.toString("utf-8"));
+          const imageSig = Array.isArray(meta?.attributes)
+            ? meta.attributes.find((a: any) => a?.trait_type === "inscription")?.value : null;
+          if (typeof imageSig === "string" && /^[1-9A-HJ-NP-Za-km-z]{80,90}$/.test(imageSig)) {
+            decoded = await readInscribedImage(imageSig);
+          }
+        } catch { /* ordinary text/JSON keeps its existing preview */ }
+      }
+      if (detectImageType(decoded)) {
+        buf = await sharp(decoded, { limitInputPixels: 16_000_000 })
+          .rotate().resize({ width: 1200, height: 1200, fit: "inside", withoutEnlargement: true })
+          .png().timeout({ seconds: 5 }).toBuffer();
+      } else if (isPng) {
+        const svg = generateSvg(decoded.toString("utf-8"), sig);
         const resvg = new Resvg(svg, {
           fitTo: { mode: "width" as const, value: 800 },
           font: {
@@ -231,19 +242,20 @@ renderRouter.get("/:sig", async (c) => {
         const rendered = resvg.render();
         buf = Buffer.from(rendered.asPng());
       } else {
-        buf = Buffer.from(svg, "utf-8");
+        buf = Buffer.from(generateSvg(decoded.toString("utf-8"), sig), "utf-8");
       }
 
       imageCache.set(cacheKey, buf, TTL.IMAGE);
       await setDiskCache("render", renderKey, buf);
     } catch (e: unknown) {
       const msg = e instanceof Error ? e.message : "unknown error";
+      if (msg === "image inscription not found") return c.text("not found", 404);
       console.error("render error:", msg);
       return c.text("failed to render", 500);
     }
   }
 
-  const contentType = isPng ? "image/png" : "image/svg+xml";
+  const contentType = detectImageType(buf) || (isPng ? "image/png" : "image/svg+xml");
   const etag = generateETag(buf);
   if (c.req.header("If-None-Match") === etag) return c.body(null, 304);
 
