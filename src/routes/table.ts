@@ -534,18 +534,24 @@ tableRouter.get("/:feedPda/thread/:threadPda", async (c) => {
       resolveRowsFromSignatures(feedSigs),
       resolveRowsFromSignatures(threadSigs),
     ]);
+    // Edits and other instructions can reference the thread PDA. Only posts
+    // carry a post timestamp, independent of the transaction's block time.
+    const threadPosts = threadRows.filter(
+      (row): row is Record<string, unknown> & { time: number } =>
+        typeof row.time === "number" && Number.isFinite(row.time),
+    );
 
     const feedForThread = feedRows.filter(
       (r) => (r as { threadPda?: string }).threadPda === threadPda,
     );
     const op = pickOp(feedForThread as Array<Record<string, unknown>>)
-      ?? pickOp(threadRows as Array<Record<string, unknown>>)
+      ?? pickOp(threadPosts)
       ?? null;
 
     const opSig = (op as { __txSignature?: string } | null)?.__txSignature;
-    const replies = threadRows
-      .filter((r) => (r as { __txSignature?: string }).__txSignature !== opSig)
-      .sort((a, b) => ((a as { time?: number }).time ?? 0) - ((b as { time?: number }).time ?? 0));
+    const replies = threadPosts
+      .filter((row) => row.__txSignature !== opSig)
+      .sort((a, b) => a.time - b.time);
 
     const json = JSON.stringify({
       threadPda,
