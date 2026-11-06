@@ -70,6 +70,43 @@ beforeEach(() => {
   lastRefresh.clear();
 });
 
+test("a BlockChan edit transaction is not a second reply", async () => {
+  const threadPda = "So11111111111111111111111111111111111111112";
+  const url = `/${TABLE_PDA}/thread/${threadPda}`;
+  const op = {
+    __txSignature: "tsig-thread-op",
+    threadPda,
+    threadSeed: "test-thread",
+    sub: "Subject",
+    time: 100,
+  };
+  const reply = {
+    ...op,
+    __txSignature: "tsig-thread-reply",
+    sub: "",
+    com: "Original reply",
+    time: 101,
+  };
+  const edit = {
+    __txSignature: "tsig-thread-edit",
+    target: reply.__txSignature,
+    com: "Edited reply",
+    __blockTime: 102,
+  };
+  signatures = [edit.__txSignature, reply.__txSignature, op.__txSignature];
+  rowsBySig = new Map([edit, reply, op].map((row) => [row.__txSignature, row]));
+
+  for (const cached of [false, true]) {
+    const response = await tableRouter.request(url);
+    expect(response.status).toBe(200);
+    const body = await response.json();
+    expect(body.cached).toBe(cached);
+    expect(body.op).toEqual(op);
+    expect(body.replies).toEqual([reply]);
+    expect(body.totalReplies).toBe(1);
+  }
+});
+
 describe("/table/:pda/threads", () => {
   test("groups a flat comment table into threads with parentAuthor refs", async () => {
     // Newest-first, mirroring the signature scan. Replies reference their
