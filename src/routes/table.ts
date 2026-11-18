@@ -869,7 +869,8 @@ tableRouter.get("/:tablePda/slice", async (c) => {
 });
 
 // ─── POST /table/:tablePda/notify ────────────────────────────────────────────
-// Frontend calls this after posting a tx. Gateway fetches that one row,
+// Frontend calls this after posting a tx. Gateway decodes that one row from
+// chain (never from the request body),
 // prepends it to the cached rows response so the next /rows request includes
 // it immediately, even before the RPC indexes the new signature. Cached
 // /threads entries get the same injection (re-grouped, so replies land under
@@ -884,7 +885,6 @@ tableRouter.post("/:tablePda/notify", async (c) => {
   const tablePda = c.req.param("tablePda");
   const body = await c.req.json().catch(() => null);
   const txSig = body?.txSignature;
-  const rowData = body?.row;
   const signer = body?.signer;
 
   // Drop the writer's cached assets list so their next /user/.../assets
@@ -899,16 +899,10 @@ tableRouter.post("/:tablePda/notify", async (c) => {
     return c.json({ error: "invalid table PDA" }, 400);
   }
 
-  // Use row data from frontend if provided, otherwise try fetching from chain.
-  // Client sends a top-level `signer` for user-asset invalidation — reuse it to
-  // stamp __signer on the row so clients don't have to populate it twice.
-  const row = rowData
-    ? {
-        ...rowData,
-        __txSignature: txSig,
-        ...(typeof signer === "string" && !rowData.__signer ? { __signer: signer } : {}),
-      }
-    : await readSingleRow(txSig).catch(() => null);
+  // /notify is unauthenticated, so the request only names a tx: the row is
+  // always decoded from chain and any `row` in the body is ignored. A tx the
+  // RPC cannot serve yet falls through to the invalidate path below.
+  const row = await readSingleRow(txSig).catch(() => null);
 
   if (!row) {
     // Even if we can't get the row, invalidate cache so next fetch is fresh.
@@ -965,21 +959,9 @@ tableRouter.post("/:tablePda/notify", async (c) => {
   }
 
   // Write-through: the disk copy is what a restart or eviction promotes, so
-  // it has to carry the prepended row too. But rows disk pages are permanent
-  // and /notify is unauthenticated, so a client-supplied row only persists
-  // once the tx it claims resolves on chain; an unverifiable row stays
-  // memory-only and dies with HEAD_TTL, exactly like before this change.
-  if (touchedKeys.length > 0) {
-    void (async () => {
-      const verified = !rowData || (await readSingleRow(txSig).catch(() => null)) !== null;
-      if (!verified) return;
-      for (const key of touchedKeys) {
-        const entry = rowsCache.get(key);
-        if (entry?.rows?.some((r) => (r as { __txSignature?: string }).__txSignature === txSig)) {
-          setDiskCache("rows", key, entry.json).catch(() => {});
-        }
-      }
-    })();
+  // it has to carry the prepended row too.
+  for (const key of touchedKeys) {
+    setDiskCache("rows", key, rowsCache.get(key)!.json).catch(() => {});
   }
 
   // Set refresh timestamp to NOW so background refresh doesn't overwrite

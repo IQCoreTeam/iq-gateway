@@ -187,7 +187,7 @@ describe("feed anchor (no Table account) cache refresh", () => {
     expect(promotedBody.rows.map((r: Row) => r.__txSignature)).toEqual(["sig-b", "sig-a"]);
   });
 
-  test("unverifiable notify row stays memory-only and never poisons disk", async () => {
+  test("notify ignores the request body row: only chain rows are cached or served", async () => {
     const PDA = freshPda();
     signatures = ["sig-a"];
     rowsBySig = new Map([["sig-a", { __txSignature: "sig-a", value: "a" }]]);
@@ -196,29 +196,39 @@ describe("feed anchor (no Table account) cache refresh", () => {
     expect(first.status).toBe(200);
     await waitForDiskSig(PDA, 5, "sig-a");
 
-    // Fabricated signature: readSingleRow cannot resolve it, so the
-    // write-through verification must refuse to persist the page.
-    const notified = await tableRouter.request(`/${PDA}/notify`, {
+    const post = (txSignature: string) => tableRouter.request(`/${PDA}/notify`, {
       method: "POST",
       headers: { "content-type": "application/json" },
-      body: JSON.stringify({ txSignature: "sig-fake", row: { value: "spoof" } }),
+      body: JSON.stringify({ txSignature, row: { value: "spoof" } }),
     });
-    expect(notified.status).toBe(200);
+    const served = async () => JSON.stringify([
+      await (await tableRouter.request(`/${PDA}/rows?limit=5`)).json(),
+      await (await tableRouter.request(`/${PDA}/rows?limit=5&fresh=true`)).json(),
+      await (await tableRouter.request(`/${PDA}/slice?sigs=sig-a,sig-fake,sig-b`)).json(),
+    ]);
 
-    // Memory serves it (indexing-lag UX, dies with HEAD_TTL, same as ever).
+    // Fabricated signature: nothing on chain, so nothing is injected anywhere.
+    expect(await (await post("sig-fake")).json()).toEqual({ ok: true, cached: false });
+    // Existing signature with a different body: the chain row keeps being served.
+    expect((await post("sig-a")).status).toBe(200);
+    // New real signature with a mismatched body: the chain decode is injected.
+    signatures = ["sig-b", "sig-a"];
+    rowsBySig.set("sig-b", { __txSignature: "sig-b", value: "b" });
+    expect(await (await post("sig-b")).json()).toEqual({ ok: true, cached: true });
+    await waitForDiskSig(PDA, 5, "sig-b");
+
+    expect(await served()).not.toContain("spoof");
     const hot = await tableRouter.request(`/${PDA}/rows?limit=5`);
-    expect((await hot.json()).rows.map((r: Row) => r.__txSignature)).toEqual(["sig-fake", "sig-a"]);
+    expect((await hot.json()).rows).toEqual([
+      { __txSignature: "sig-b", value: "b" },
+      { __txSignature: "sig-a", value: "a" },
+    ]);
 
-    // Disk never gets it: after the verification window, the page on disk
-    // still carries only the chain-backed row, and a restart drops the fake.
-    await new Promise((resolve) => setTimeout(resolve, 100));
-    const disk = (await getDiskCache("rows", headKey(PDA, 5)))?.toString("utf8") ?? "";
-    expect(disk).toContain("sig-a");
-    expect(disk).not.toContain("sig-fake");
-
+    // Restart: memory gone, disk copies (rows page and per-row meta) are clean too.
     rowsCache.clear();
-    const promoted = await tableRouter.request(`/${PDA}/rows?limit=5`);
-    expect((await promoted.json()).rows.map((r: Row) => r.__txSignature)).toEqual(["sig-a"]);
+    sliceCache.clear();
+    expect(await served()).not.toContain("spoof");
+    expect((await getDiskCache("rows", headKey(PDA, 5)))?.toString("utf8")).not.toContain("spoof");
   });
 });
 

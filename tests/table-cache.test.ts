@@ -152,13 +152,11 @@ describe("/table/:pda/rows cache refresh", () => {
     expect(first.status).toBe(200);
     expect((await first.json()).rows.map((r: Row) => r.__txSignature)).toEqual(["sig-a", "sig-b", "sig-c", "sig-d", "sig-e"]);
 
+    rowsBySig.set("sig-f", { __txSignature: "sig-f", value: "f" });
     const notified = await tableRouter.request(`/${TABLE_PDA}/notify`, {
       method: "POST",
       headers: { "content-type": "application/json" },
-      body: JSON.stringify({
-        txSignature: "sig-f",
-        row: { value: "f" },
-      }),
+      body: JSON.stringify({ txSignature: "sig-f" }),
     });
     expect(notified.status).toBe(200);
 
@@ -268,10 +266,11 @@ describe("/table/:pda/rows cache refresh", () => {
     expect(firstBody.count).toBe(3);
     expect(firstBody.nextCursor).toBe("note-5");
 
+    rowsBySig.set("note-new", { __txSignature: "note-new", value: "new" });
     const notified = await tableRouter.request(`/${GAP_TABLE_PDA}/notify`, {
       method: "POST",
       headers: { "content-type": "application/json" },
-      body: JSON.stringify({ txSignature: "note-new", row: { value: "new" } }),
+      body: JSON.stringify({ txSignature: "note-new" }),
     });
     expect(notified.status).toBe(200);
 
@@ -305,10 +304,11 @@ describe("/table/:pda/rows cache refresh", () => {
     expect(firstBody.nextCursor).toBe("m-8");
     expect(firstBody.rows[firstBody.rows.length - 1].signature).toBe("m-meta");
 
+    rowsBySig.set("m-new", { __txSignature: "m-new", value: "new" });
     const notified = await tableRouter.request(`/${GAP_TABLE_PDA}/notify`, {
       method: "POST",
       headers: { "content-type": "application/json" },
-      body: JSON.stringify({ txSignature: "m-new", row: { value: "new" } }),
+      body: JSON.stringify({ txSignature: "m-new" }),
     });
     expect(notified.status).toBe(200);
 
@@ -370,13 +370,11 @@ describe("/table/:pda/threads notify injection", () => {
     expect(first.status).toBe(200);
     expect((await first.json()).threads.map((t: { op: Row }) => t.op.id)).toEqual(["a"]);
 
+    rowsBySig.set("sig-note-b", { __txSignature: "sig-note-b", id: "b", author: "bob", timestamp: 2, body: "second" });
     const notified = await tableRouter.request(`/${TABLE_PDA}/notify`, {
       method: "POST",
       headers: { "content-type": "application/json" },
-      body: JSON.stringify({
-        txSignature: "sig-note-b",
-        row: { id: "b", author: "bob", timestamp: 2, body: "second" },
-      }),
+      body: JSON.stringify({ txSignature: "sig-note-b" }),
     });
     expect(notified.status).toBe(200);
 
@@ -398,13 +396,11 @@ describe("/table/:pda/threads notify injection", () => {
     const first = await tableRouter.request(`/${TABLE_PDA}/threads?limit=50`);
     expect(first.status).toBe(200);
 
+    rowsBySig.set("sig-reply-b", { __txSignature: "sig-reply-b", id: "b", author: "bob", timestamp: 2, meta: { parentId: "a" } });
     const notified = await tableRouter.request(`/${TABLE_PDA}/notify`, {
       method: "POST",
       headers: { "content-type": "application/json" },
-      body: JSON.stringify({
-        txSignature: "sig-reply-b",
-        row: { id: "b", author: "bob", timestamp: 2, meta: { parentId: "a" } },
-      }),
+      body: JSON.stringify({ txSignature: "sig-reply-b" }),
     });
     expect(notified.status).toBe(200);
 
@@ -469,13 +465,11 @@ describe("/table/:pda/threads notify injection", () => {
     expect(inflight.size).toBeGreaterThan(0);
 
     // /notify lands while that refresh is in flight and injects row b.
+    rowsBySig.set("sig-race-b", { __txSignature: "sig-race-b", id: "b", author: "bob", timestamp: 2 });
     const notified = await tableRouter.request(`/${TABLE_PDA}/notify`, {
       method: "POST",
       headers: { "content-type": "application/json" },
-      body: JSON.stringify({
-        txSignature: "sig-race-b",
-        row: { id: "b", author: "bob", timestamp: 2 },
-      }),
+      body: JSON.stringify({ txSignature: "sig-race-b" }),
     });
     expect(notified.status).toBe(200);
 
@@ -515,12 +509,13 @@ describe("notify durability across head-cache expiry", () => {
       singleRowError = failure;
       const notify = await tableRouter.request(`/${GAP_TABLE_PDA}/notify`, {
         method: "POST", headers: { "content-type": "application/json" },
+        // The body row is ignored: only the chain read decides what is served.
         body: JSON.stringify({ txSignature: added.__txSignature, row: added }),
       });
       expect(notify.status).toBe(200);
       await waitFor(() => singleRowReads > 0);
       const immediate = await tableRouter.request(`/${GAP_TABLE_PDA}/rows?limit=${limit}`);
-      expect((await immediate.json()).rows.map((r: Row) => r.__txSignature)).toContain("new-durable");
+      expect((await immediate.json()).rows.some((r: Row) => r.__txSignature === "new-durable")).toBe(!failure);
       if (!failure) {
         await waitFor(async () => (await getDiskCache("rows", key))?.toString().includes("new-durable") === true);
       } else {

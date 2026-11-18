@@ -8,7 +8,10 @@ mock.module("../src/cache/catalog-ingest.evm", () => ({ ingestRow: async () => {
 const { tableRouter } = await import("../src/routes/evm/table");
 const { recordRows } = await import("../src/cache/row-index");
 const hash = (n: number) => "0x" + n.toString(16).padStart(64, "0");
-const chain = { readTableRows: async () => [], readSingleRow: async () => null };
+// notify decodes the row from chain and ignores the request body, so the
+// helper below puts the row on this fake chain before posting its tx hash.
+const chainRows = new Map<string, Record<string, unknown>>();
+const chain = { readTableRows: async () => [], readSingleRow: async (h: string) => chainRows.get(h) ?? null };
 const app = new Hono();
 app.use("*", async (c, next) => {
   c.set("chain" as never, chain as never);
@@ -17,7 +20,8 @@ app.use("*", async (c, next) => {
 });
 app.route("/table", tableRouter);
 async function notify(table: string, row: Record<string, unknown>, n: number) {
-  const response = await app.request(`/table/iqchan/${table}/notify`, {method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({txHash:hash(n),row})});
+  chainRows.set(hash(n), { ...row, __txHash: hash(n) });
+  const response = await app.request(`/table/iqchan/${table}/notify`, {method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({txHash:hash(n)})});
   // Notify persists its row asynchronously. Observe that write before the
   // shared fixture closes SQLite and removes the temporary directory.
   const key = createHash("sha256").update(`robinhood:row:${hash(n)}`).digest("hex").slice(0, 24);
@@ -111,4 +115,12 @@ test("an invalidated request cannot clear its replacement from the inflight map"
   expect(requests.get("thread")).toBe(current);
   resolveNew(2); await current;
   expect(requests.has("thread")).toBe(false);
+});
+
+test("notify ignores a request body row for a tx the chain cannot decode", async () => {
+  const response = await app.request(`/table/iqchan/spoof/notify`, {method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({txHash:hash(99),row:{sub:"spoof",threadPda:"spoof-thread",time:1}})});
+  expect(await response.json()).toEqual({ ok: true, cached: false });
+  const key = createHash("sha256").update(`robinhood:row:${hash(99)}`).digest("hex").slice(0, 24);
+  expect(await getDiskCache("meta", key, "robinhood")).toBeNull();
+  expect((await (await app.request(`/table/iqchan/spoof/thread/spoof-thread`)).json()).op).toBeNull();
 });

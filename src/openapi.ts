@@ -120,8 +120,8 @@ export const openapiSpec = {
                 required: ["txSignature"],
                 properties: {
                   txSignature: { type: "string" },
-                  row: { type: "object", additionalProperties: true },
-                  signer: { type: "string", description: "Fee payer pubkey — used for __signer stamp + user-asset invalidation" },
+                  row: { type: "object", additionalProperties: true, deprecated: true, description: "Ignored. The row is always decoded from chain by txSignature." },
+                  signer: { type: "string", description: "Fee payer pubkey, used for user-asset invalidation" },
                 },
               },
             },

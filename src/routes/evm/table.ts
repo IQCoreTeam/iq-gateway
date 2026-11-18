@@ -700,20 +700,15 @@ tableRouter.post("/:dbRootId/:tableName/notify", async (c) => {
   const network = c.get("network");
   const body = await c.req.json().catch(() => null);
   const txHash: string | undefined = body?.txHash || body?.txSignature;
-  const rowData = body?.row;
   const signer: string | undefined = body?.signer;
 
   if (typeof signer === "string" && isEvmAddress(signer)) invalidateUserAssets(signer);
 
   if (!txHash || !isTxHash(txHash)) return c.json({ error: "valid txHash required" }, 400);
 
-  const row = rowData
-    ? {
-        ...rowData,
-        __txHash: txHash,
-        ...(typeof signer === "string" && !rowData.__signer ? { __signer: signer } : {}),
-      }
-    : await chain.readSingleRow(txHash).catch(() => null);
+  // /notify is unauthenticated: the row is always decoded from chain and any
+  // `row` in the body is ignored.
+  const row = await chain.readSingleRow(txHash).catch(() => null);
 
   if (!row) {
     invalidateThreads(network, dbRootId, tableName);
