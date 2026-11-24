@@ -52,16 +52,21 @@ export async function getDiskCache(
   type: CacheType,
   key: string,
   network: Network = DEFAULT_NETWORK,
+  maxBytes?: number,
 ): Promise<Buffer | null> {
   const sk = storeKey(network, type, key);
   const entry = await getEntry(sk, DISK_TTL[type]);
-  if (!entry) return null;
+  if (!entry || (maxBytes !== undefined && entry.size > maxBytes)) return null;
   // Try the stored path first (fast path for entries written this
   // process); fall back to the canonical pathFor() so caches imported
   // from a peer (where the stored path may be relative to a different
   // CACHE_DIR) still resolve.
   for (const path of [entry.path, pathFor(network, type, key)]) {
-    try { return await readFile(path); } catch {}
+    try {
+      if (maxBytes === undefined) return await readFile(path);
+      const data = Buffer.from(await Bun.file(path).slice(0, maxBytes + 1).arrayBuffer());
+      return data.length <= maxBytes ? data : null;
+    } catch {}
   }
   await removeEntry(sk);
   return null;

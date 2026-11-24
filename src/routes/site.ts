@@ -1,11 +1,22 @@
 import { Hono } from "hono";
 import { readAsset, decodeAssetData, generateETag } from "../chain/solana";
 import { MemoryCache, TTL, getDiskCache, setDiskCache } from "../cache";
+import { deduped } from "../cache/dedup";
+import { verifiedObjectDiskCache } from "../cache/verified-objects";
+import { MAX_CODE_IN_OBJECT_BYTES } from "../chain/solana/code-in-object";
+import { busyByteResponse, serveByteSource } from "../http-byte-source";
+import { parseRange } from "../http-range";
+import { isSolanaSignature } from "../utils";
+import { parseChunkedSiteFile, SiteChunkError, SiteChunkStore, type ChunkedSiteFile } from "../site-chunked-file";
 
 export const siteRouter = new Hono();
 
 const manifestCache = new MemoryCache<string>(200);
+const manifestReads = new Map<string, Promise<unknown>>();
+class SiteManifestBusy extends Error {}
 const fileCache = new MemoryCache<Buffer>(500);
+const chunkStore = new SiteChunkStore(readAsset, verifiedObjectDiskCache, async (sig) =>
+  (await cachedAsset(sig, 2 * MAX_CODE_IN_OBJECT_BYTES))?.data ?? null);
 
 // Sequential read queue to avoid RPC rate limits.
 let readQueue: Promise<void> = Promise.resolve();
@@ -19,31 +30,48 @@ function enqueueRead<T>(fn: () => Promise<T>): Promise<T> {
 export interface Manifest {
   indexPath: string;
   files: Record<string, string>; // path -> txId
+  chunkedFiles?: Record<string, ChunkedSiteFile>;
 }
 
 // Gateway format: { index: { path }, paths: { file: { id } } }
 // Iqoogle format: { "file": { txId, hash } }
 export function parseManifest(raw: Record<string, unknown>): Manifest {
-  const files: Record<string, string> = {};
+  const files: Record<string, string> = Object.create(null);
+  const chunkedFiles: Record<string, ChunkedSiteFile> = Object.create(null);
+  function addChunked(path: string, entry: object) {
+    if (!("chunked" in entry)) return;
+    const descriptor = parseChunkedSiteFile(entry.chunked);
+    if (descriptor) chunkedFiles[path] = descriptor;
+  }
   let indexPath = "index.html";
 
   if (raw.paths && typeof raw.paths === "object") {
-    const paths = raw.paths as Record<string, { id: string }>;
+    const paths = raw.paths as Record<string, { id?: unknown } | undefined>;
     for (const [p, entry] of Object.entries(paths)) {
-      if (entry?.id) files[p] = entry.id;
+      if (typeof entry?.id === "string" && entry.id) files[p] = entry.id;
+      else if (entry && typeof entry === "object") addChunked(p, entry);
     }
-    if (raw.index && typeof raw.index === "object" && (raw.index as { path?: string }).path) {
-      indexPath = (raw.index as { path: string }).path;
+    if (raw.index && typeof raw.index === "object") {
+      const path = (raw.index as { path?: unknown }).path;
+      if (typeof path === "string" && path) indexPath = path;
     }
   } else {
     for (const [p, entry] of Object.entries(raw)) {
-      if (entry && typeof entry === "object" && (entry as { txId?: string }).txId) {
-        files[p] = (entry as { txId: string }).txId;
+      if (entry && typeof entry === "object") {
+        const id = (entry as { txId?: unknown }).txId;
+        if (typeof id === "string" && id) files[p] = id;
+        else addChunked(p, entry);
       }
     }
   }
 
-  return { indexPath, files };
+  return { indexPath, files,
+    ...(Object.keys(chunkedFiles).length ? { chunkedFiles } : {}),
+  };
+}
+
+function hasFiles(manifest: Manifest) {
+  return Object.keys(manifest.files).length > 0 || Boolean(manifest.chunkedFiles);
 }
 
 const MIME_TYPES: Record<string, string> = {
@@ -83,7 +111,23 @@ async function fetchManifest(sig: string): Promise<Manifest> {
   const key = `manifest:${sig}`;
   const cached = manifestCache.get(key);
   if (cached) return JSON.parse(cached) as Manifest;
+  if (manifestReads.size >= 16 && !manifestReads.has(key)) throw new SiteManifestBusy();
+  return deduped(manifestReads, key, () => readManifest(sig, key));
+}
 
+async function cachedAsset(sig: string, maxBytes?: number): Promise<{ data: string; metadata?: string } | null> {
+  const stored = await getDiskCache("meta", `data:${sig}`, undefined, maxBytes);
+  if (!stored) return null;
+  try {
+    const { data, metadata } = JSON.parse(stored.toString("utf8"));
+    return typeof data === "string" && data
+      ? { data, metadata: typeof metadata === "string" ? metadata : undefined } : null;
+  } catch {
+    return null;
+  }
+}
+
+async function readManifest(sig: string, key: string): Promise<Manifest> {
   const disk = await getDiskCache("site", sig);
   if (disk) {
     const text = new TextDecoder().decode(disk);
@@ -91,34 +135,28 @@ async function fetchManifest(sig: string): Promise<Manifest> {
     return JSON.parse(text) as Manifest;
   }
 
-  const backfillData = await getDiskCache("meta", `data:${sig}`);
-  if (backfillData) {
+  const backfill = await cachedAsset(sig);
+  if (backfill) {
     try {
-      const parsed = JSON.parse(new TextDecoder().decode(backfillData));
-      if (parsed.data) {
-        const decoded = decodeAssetData(parsed.data);
-        const text = decoded.toString("utf-8");
-        const raw = JSON.parse(text);
-        const manifest = parseManifest(raw);
-        if (Object.keys(manifest.files).length > 0) {
-          const normalized = JSON.stringify(manifest);
-          manifestCache.set(key, normalized, TTL.META_IMMUTABLE);
-          await setDiskCache("site", sig, Buffer.from(normalized));
-          return manifest;
-        }
+      const decoded = decodeAssetData(backfill.data);
+      const manifest = parseManifest(JSON.parse(decoded.toString("utf-8")));
+      if (hasFiles(manifest)) {
+        const normalized = JSON.stringify(manifest);
+        manifestCache.set(key, normalized, TTL.META_IMMUTABLE);
+        await setDiskCache("site", sig, Buffer.from(normalized));
+        return manifest;
       }
     } catch {}
   }
 
   const { data } = await readAsset(sig);
   if (!data) throw new Error("manifest not found");
-
   const decoded = decodeAssetData(data);
   const text = decoded.toString("utf-8");
   const raw = JSON.parse(text);
   const manifest = parseManifest(raw);
 
-  if (Object.keys(manifest.files).length === 0) {
+  if (!hasFiles(manifest)) {
     throw new Error("invalid manifest: no files found");
   }
 
@@ -129,6 +167,7 @@ async function fetchManifest(sig: string): Promise<Manifest> {
 }
 
 async function fetchFile(sig: string): Promise<Buffer> {
+  if (!isSolanaSignature(sig)) throw new Error("invalid site asset signature");
   const key = `file:v2:${sig}`;
   const diskKey = `v2:${sig}`;
   const cached = fileCache.get(key);
@@ -140,16 +179,13 @@ async function fetchFile(sig: string): Promise<Buffer> {
     return disk;
   }
 
-  const backfillData = await getDiskCache("meta", `data:${sig}`);
-  if (backfillData) {
+  const backfill = await cachedAsset(sig);
+  if (backfill) {
     try {
-      const parsed = JSON.parse(new TextDecoder().decode(backfillData));
-      if (parsed.data) {
-        const buf = decodeAssetData(parsed.data, parsed.metadata);
-        fileCache.set(key, buf, TTL.IMAGE);
-        await setDiskCache("site-file", diskKey, buf);
-        return buf;
-      }
+      const buf = decodeAssetData(backfill.data, backfill.metadata);
+      fileCache.set(key, buf, TTL.IMAGE);
+      await setDiskCache("site-file", diskKey, buf);
+      return buf;
     } catch {}
   }
 
@@ -167,38 +203,6 @@ async function fetchFile(sig: string): Promise<Buffer> {
   });
 }
 
-// Parse a single-range "bytes=start-end" header against a known total size.
-// Returns null for absent/unsatisfiable/multi-range headers — callers fall back
-// to a full 200 response. iOS Safari only ever sends a single open range, so we
-// deliberately don't support multipart ranges.
-export function parseRange(
-  range: string | undefined,
-  size: number,
-): { start: number; end: number } | null {
-  if (!range) return null;
-  const m = /^bytes=(\d*)-(\d*)$/.exec(range.trim());
-  if (!m) return null;
-  const [, rawStart, rawEnd] = m;
-  if (rawStart === "" && rawEnd === "") return null;
-
-  let start: number;
-  let end: number;
-  if (rawStart === "") {
-    // suffix range: last N bytes
-    const suffix = Number(rawEnd);
-    if (suffix <= 0) return null;
-    start = Math.max(0, size - suffix);
-    end = size - 1;
-  } else {
-    start = Number(rawStart);
-    end = rawEnd === "" ? size - 1 : Math.min(Number(rawEnd), size - 1);
-  }
-
-  if (!Number.isFinite(start) || !Number.isFinite(end)) return null;
-  if (start > end || start >= size) return null;
-  return { start, end };
-}
-
 export function buildFileResponse(
   buf: Buffer,
   filePath: string,
@@ -208,6 +212,7 @@ export function buildFileResponse(
   const isImmutable = !filePath.endsWith(".html") && !filePath.endsWith(".htm");
   const headers: Record<string, string> = {
     "Content-Type": mime,
+    "X-Content-Type-Options": "nosniff",
     "Cache-Control": isImmutable
       ? "public, max-age=31536000, immutable"
       : "public, max-age=300",
@@ -218,7 +223,7 @@ export function buildFileResponse(
     ETag: generateETag(buf),
   };
 
-  const parsed = parseRange(range ?? undefined, buf.length);
+  const parsed = parseRange(range, buf.length);
   if (parsed) {
     const { start, end } = parsed;
     const slice = buf.subarray(start, end + 1);
@@ -233,7 +238,7 @@ export function resolveFile(manifest: Manifest, filePath: string): string | null
   let p = filePath;
   if (!p || p === "/") p = manifest.indexPath;
   if (p.startsWith("/")) p = p.slice(1);
-  return manifest.files[p] ?? null;
+  return Object.hasOwn(manifest.files, p) && typeof manifest.files[p] === "string" ? manifest.files[p] : null;
 }
 
 // Request-scoped helper. No globals. Each call serves files from the manifest
@@ -245,13 +250,17 @@ export async function serveManifestPath(input: {
   spaFallback?: boolean;
   ifNoneMatch?: string | null;
   range?: string | null;
+  signal?: AbortSignal;
+  method?: string;
 }): Promise<Response> {
   const { manifestSig, filePath, indexPath, spaFallback, ifNoneMatch, range } = input;
+  if (!isSolanaSignature(manifestSig)) return new Response("invalid manifest signature", { status: 400 });
 
   let manifest: Manifest;
   try {
     manifest = await fetchManifest(manifestSig);
   } catch (e) {
+    if (e instanceof SiteManifestBusy) return busyByteResponse();
     return new Response(
       `manifest error: ${e instanceof Error ? e.message : "unknown"}`,
       { status: 404, headers: { "Content-Type": "text/plain" } },
@@ -264,21 +273,33 @@ export async function serveManifestPath(input: {
       ? { ...manifest, indexPath: effectiveIndex }
       : manifest;
 
-  const directTxId = resolveFile(lookupManifest, filePath);
-  let targetTxId: string | null = directTxId;
-  let servePath: string;
-  if (directTxId) {
-    servePath = filePath === "" || filePath === "/"
-      ? effectiveIndex
-      : (filePath.startsWith("/") ? filePath.slice(1) : filePath);
-  } else if (spaFallback) {
-    targetTxId = resolveFile(lookupManifest, effectiveIndex);
+  const requestedPath = !filePath || filePath === "/" ? effectiveIndex : filePath.replace(/^\//, "");
+  const getChunked = (path: string) => {
+    const files = manifest.chunkedFiles;
+    return files && Object.hasOwn(files, path) ? files[path] : undefined;
+  };
+  let targetTxId = resolveFile(lookupManifest, filePath);
+  let servePath = requestedPath;
+  let chunked = getChunked(servePath);
+  if (!targetTxId && !chunked && spaFallback) {
     servePath = effectiveIndex;
-  } else {
-    return new Response("not found", {
-      status: 404,
-      headers: { "Content-Type": "text/plain" },
-    });
+    targetTxId = resolveFile(lookupManifest, effectiveIndex);
+    chunked = getChunked(servePath);
+  }
+  if (chunked) {
+    try {
+      const response = await serveByteSource(chunkStore.source(chunked), {
+        range, signal: input.signal, method: input.method, contentType: "application/octet-stream",
+      });
+      response.headers.set("X-Content-Type-Options", "nosniff");
+      response.headers.set("Access-Control-Allow-Origin", "*");
+      response.headers.set("Access-Control-Expose-Headers", "Content-Range, Retry-After");
+      return response;
+    } catch (error) {
+      const status = error instanceof SiteChunkError ? error.status : 502;
+      if (status === 503) return busyByteResponse();
+      return new Response("Could not read the verified site file", { status });
+    }
   }
 
   if (!targetTxId) {
@@ -316,11 +337,12 @@ export async function serveManifestPath(input: {
 // having to parse the two raw manifest formats themselves.
 siteRouter.get("/:sig/manifest", async (c) => {
   const sig = c.req.param("sig");
-  if (sig.length < 80) return c.text("invalid manifest signature", 400);
+  if (!isSolanaSignature(sig)) return c.text("invalid manifest signature", 400);
   try {
     const manifest = await fetchManifest(sig);
     return c.json({ manifestSig: sig, ...manifest });
   } catch (e) {
+    if (e instanceof SiteManifestBusy) return busyByteResponse();
     return c.text(
       `manifest error: ${e instanceof Error ? e.message : "unknown"}`,
       404,
@@ -328,7 +350,7 @@ siteRouter.get("/:sig/manifest", async (c) => {
   }
 });
 
-// GET /site/:manifestSig          -> serves index
+// GET /site/:manifestSig          -> redirects to the directory URL
 // GET /site/:manifestSig/*path    -> serves file at path
 // SPA fallback on miss matches the legacy behavior.
 siteRouter.get("/:sig{.+}", async (c) => {
@@ -337,9 +359,11 @@ siteRouter.get("/:sig{.+}", async (c) => {
   const manifestSig = slashIdx > 0 ? raw.slice(0, slashIdx) : raw;
   const filePath = slashIdx > 0 ? raw.slice(slashIdx + 1) : "";
 
-  if (manifestSig.length < 80) {
+  if (!isSolanaSignature(manifestSig)) {
     return c.text("invalid manifest signature", 400);
   }
+  const { pathname, search } = new URL(c.req.url);
+  if (!filePath && !pathname.endsWith("/")) return c.redirect(`/site/${manifestSig}/${search}`, 308);
 
   const response = await serveManifestPath({
     manifestSig,
@@ -347,12 +371,9 @@ siteRouter.get("/:sig{.+}", async (c) => {
     spaFallback: true,
     ifNoneMatch: c.req.header("If-None-Match") ?? null,
     range: c.req.header("Range") ?? null,
+    signal: c.req.raw.signal,
+    method: c.req.method,
   });
 
-  if (response.status === 304) return c.body(null, 304);
-
-  const headers: Record<string, string> = {};
-  response.headers.forEach((v, k) => { headers[k] = v; });
-  const body = await response.arrayBuffer();
-  return c.body(body, response.status as 200 | 206, headers);
+  return response;
 });

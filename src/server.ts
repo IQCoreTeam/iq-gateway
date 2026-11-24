@@ -357,16 +357,13 @@ async function bootSolana(target: Hono<any>): Promise<void> {
       const recordPath = slash === -1 ? "" : resolved.slice(slash + 1);
       const reqPath = c.req.path;
       const filePath = (reqPath === "/" || reqPath === "") && recordPath ? `/${recordPath}` : reqPath;
-      const response = await serveManifestPath({
+      return serveManifestPath({
         manifestSig: sig, filePath, spaFallback: true,
         ifNoneMatch: c.req.header("If-None-Match") ?? null,
         range: c.req.header("Range") ?? null,
+        signal: c.req.raw.signal,
+        method: c.req.method,
       });
-      if (response.status === 304) return c.body(null, 304);
-      const headers: Record<string, string> = {};
-      response.headers.forEach((v, k) => { headers[k] = v; });
-      const body = await response.arrayBuffer();
-      return c.body(body, response.status as 200 | 206, headers);
     });
 
     target.get("/", homeHandler);
