@@ -38,6 +38,13 @@ describe("disk cache — per-network isolation", () => {
     expect(await getDiskCache("img", "0xIMG", "monad")).toBeNull();
     expect((await getDiskCache("img", "0xIMG", "sepolia"))?.toString()).toBe("sep");
   });
+
+  test("a bounded read skips oversized entries while preserving the cache", async () => {
+    await setDiskCache("meta", "bounded-reader-test", "12345678");
+    expect(await getDiskCache("meta", "bounded-reader-test", undefined, 7)).toBeNull();
+    expect((await getDiskCache("meta", "bounded-reader-test", undefined, 8))?.toString()).toBe("12345678");
+    expect((await getDiskCache("meta", "bounded-reader-test"))?.toString()).toBe("12345678");
+  });
 });
 
 describe("catalog — per-network search filter", () => {

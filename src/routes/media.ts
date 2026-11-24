@@ -2,7 +2,7 @@ import { Hono } from "hono";
 import { MemoryCache, TTL, deduped } from "../cache";
 import type { ChainWrapper } from "../chain/wrappers";
 import { isSolanaId, isTxHash } from "../utils";
-import { parseRange } from "./site";
+import { parseRange } from "../http-range";
 
 // Only passive media is served inline. Never fetch URLs embedded in a row.
 const MEDIA_TYPES = new Set([

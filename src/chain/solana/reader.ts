@@ -142,7 +142,7 @@ export async function readAsset(txSig: string) {
   const tx = await withRetry(() =>
     solConnection.getTransaction(txSig, { maxSupportedTransactionVersion: 1 }),
   );
-  if (!tx) throw new Error("transaction not found");
+  if (!tx?.meta || tx.meta.err) throw new Error("transaction not found");
 
   const result = await iqlabs.reader.readUserInventoryCodeInFromTx(tx,
     assetReadRps === undefined ? undefined : {

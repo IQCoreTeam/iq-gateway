@@ -9,6 +9,11 @@ export function isValidPublicKey(key: string): boolean {
   try { new PublicKey(key); return true; } catch { return false; }
 }
 
+function solanaIdBytes(value: unknown): number {
+  if (typeof value !== "string" || value.length < 32 || value.length > 88) return 0;
+  try { return bs58.decode(value).length; } catch { return 0; }
+}
+
 /** Is this any Solana on-chain id — a 32-byte pubkey/PDA OR a 64-byte tx
  *  signature? The chain resolver needs both: /user|/table take pubkeys (32B),
  *  /data|/meta|/img take signatures (64B). `isValidPublicKey` only accepts 32B,
@@ -16,13 +21,12 @@ export function isValidPublicKey(key: string): boolean {
  *  (32/64) is far stricter than a charset check, so an EVM dbRootId that happens
  *  to be base58 won't collide unless it decodes to exactly 32 or 64 bytes. */
 export function isSolanaId(s: string): boolean {
-  if (typeof s !== "string" || s.startsWith("0x")) return false;
-  try {
-    const len = bs58.decode(s).length;
-    return len === 32 || len === 64;
-  } catch {
-    return false;
-  }
+  const length = solanaIdBytes(s);
+  return length === 32 || length === 64;
+}
+
+export function isSolanaSignature(value: unknown): value is string {
+  return solanaIdBytes(value) === 64;
 }
 
 // ─── EVM id validators (used by routes/evm/*) ────────────────────────────────
