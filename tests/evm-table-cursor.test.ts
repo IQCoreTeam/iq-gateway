@@ -32,12 +32,14 @@ const rowHash = (r: Row) => (r as { __txHash?: string; txHash?: string }).__txHa
 // newest first, honoring the requested limit.
 let history: Row[] = [];
 let metaResponses: Array<{ lastTimestamp: number }> = [];
+// Rows /notify can decode by tx hash (it ignores any row in the request body).
+const chainRows = new Map<string, Row>();
 
 const fakeChain = {
   readTableRows: async (_dbRootId: string, _tableName: string, opts?: { limit?: number }) =>
     history.slice(0, opts?.limit ?? history.length).map((r) => ({ ...r })),
   getTableMetaCached: async () => metaResponses.shift() ?? { lastTimestamp: 1 },
-  readSingleRow: async () => null,
+  readSingleRow: async (h: string) => chainRows.get(h) ?? null,
 } as unknown as EvmWrapper;
 
 const app = new Hono<{ Variables: { chain: EvmWrapper; network: string } }>();
@@ -132,10 +134,11 @@ describe("/table/:dbRootId/:tableName/rows cursor", () => {
     // Walk exhausted below limit: genuinely the whole history.
     expect(firstBody.nextCursor).toBeNull();
 
+    chainRows.set(hash(7), { __txHash: hash(7), value: "new" } as Row);
     const notified = await app.request(`/${DB_ROOT}/${TABLE}/notify`, {
       method: "POST",
       headers: { "content-type": "application/json" },
-      body: JSON.stringify({ txHash: hash(7), row: { value: "new" } }),
+      body: JSON.stringify({ txHash: hash(7) }),
     });
     expect(notified.status).toBe(200);
 
@@ -151,9 +154,10 @@ describe("/table/:dbRootId/:tableName/rows cursor", () => {
 for (const limit of [24, 7]) test(`notify updates cached head for limit ${limit}`, async () => {
   history = [row(1)];
   await app.request(`/${DB_ROOT}/notify-limit-${limit}/rows?limit=${limit}`);
+  chainRows.set(hash(900+limit), { __txHash: hash(900+limit), kind: 'text', body: 'confirmed' } as Row);
   const response = await app.request(`/${DB_ROOT}/notify-limit-${limit}/notify`, {
     method:'POST', headers:{'content-type':'application/json'},
-    body:JSON.stringify({txHash:hash(900+limit),row:{kind:'text',body:'confirmed'}}),
+    body:JSON.stringify({txHash:hash(900+limit)}),
   });
   expect(response.status).toBe(200);
   const result = await (await app.request(`/${DB_ROOT}/notify-limit-${limit}/rows?limit=${limit}`)).json();
