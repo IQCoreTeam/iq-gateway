@@ -23,7 +23,7 @@ function safeDataUrl(s: string, media: RegExp, maxLen = 6_000_000): boolean {
 // ── per-kind content: one dispatch, one place ───────────────────────────────
 // Images are delegated to /img (the single image-bytes endpoint, shared with
 // NFT render + posts); everything else is built from the decoded record.
-interface Screen { kind: string; size: string; who: string; top: boolean; html: string; }
+interface Screen { kind: string; size: string; who: string; top: boolean; html: string; title?: string; description?: string; }
 
 const imgScreen = (baseUrl: string, sig: string): string =>
   `<img class="v-img" alt="inscribed image" src="${baseUrl}/img/${sig}">`;
@@ -95,7 +95,7 @@ function screenFor(sig: string, baseUrl: string, buf: Buffer): Screen {
   try {
     const o = JSON.parse(text);
     if (o && typeof o === "object" && (Array.isArray((o as Record<string, unknown>).attributes) || (typeof (o as Record<string, unknown>).name === "string" && typeof (o as Record<string, unknown>).image === "string"))) {
-      return { kind: "METADATA", size, who: "-", top: true, html: nftScreen(o as Record<string, unknown>) };
+      return { kind: "METADATA", size, who: "-", top: true, html: nftScreen(o as Record<string, unknown>), title: String((o as Record<string, unknown>).name || "IQLabs NFT").slice(0, 120), description: String((o as Record<string, unknown>).description || "NFT metadata inscribed on Solana.").slice(0, 160) };
     }
     return { kind: "DATA", size, who: "-", top: true, html: `<pre>${escapeMarkup(JSON.stringify(o, null, 2))}</pre>` };
   } catch { /* not json */ }
@@ -113,11 +113,17 @@ export function renderPage(sig: string, baseUrl: string, s: Screen, ogDesc: stri
 <meta charset="utf-8"/>
 <meta name="viewport" content="width=device-width, initial-scale=1"/>
 <title>IQLabs Inscription Console — ${escapeMarkup(shortSig)}</title>
-<meta property="og:title" content="IQLabs Inscription"/>
-<meta property="og:description" content="${escapeMarkup(ogDesc)}"/>
+<meta property="og:title" content="${escapeMarkup(s.title || "IQLabs Inscription")}"/>
+<meta property="og:type" content="website"/>
+<meta property="og:url" content="${escapeMarkup(baseUrl + "/view/" + sig)}"/>
+<meta property="og:description" content="${escapeMarkup(s.description || ogDesc)}"/>
 <meta property="og:image" content="${baseUrl}/render/${sig}?v=${RENDER_REVISION}"/>
-<link rel="icon" href="${baseUrl}/favicon.ico" sizes="any"/>
-<link rel="icon" type="image/png" href="${baseUrl}/favicon.png"/>
+<meta name="twitter:card" content="summary_large_image"/>
+<meta name="twitter:title" content="${escapeMarkup(s.title || "IQLabs Inscription")}"/>
+<meta name="twitter:description" content="${escapeMarkup(s.description || ogDesc)}"/>
+<meta name="twitter:image" content="${baseUrl}/render/${sig}?v=${RENDER_REVISION}"/>
+<link rel="icon" href="${baseUrl}/favicon.ico?v=${RENDER_REVISION}" sizes="any"/>
+<link rel="icon" type="image/png" href="${baseUrl}/favicon.png?v=${RENDER_REVISION}"/>
 <style>
 @font-face{font-family:'UnifontEX';src:url('${baseUrl}/fonts/unifont.woff2') format('woff2'),url('https://cdn.jsdelivr.net/gh/stgiga/UnifontEX@main/UnifontExMono.woff2') format('woff2');font-display:swap}
 *{margin:0;padding:0;box-sizing:border-box}
@@ -168,9 +174,10 @@ button{font:inherit;color:inherit;cursor:pointer}
 .v-file,.v-coin{display:grid;gap:12px;justify-items:center;text-align:center}
 .v-sym{font-size:48px;line-height:1}
 .v-nft{display:flex;gap:18px;align-items:flex-start;flex-wrap:wrap;width:100%}
+.v-nft>div{flex:1 1 240px;min-width:0}
 .v-nftimg{width:160px;height:160px;flex:0 0 auto;border:2px solid #1f5a24;image-rendering:pixelated}
-.v-attrs{display:grid;grid-template-columns:repeat(auto-fill,minmax(150px,1fr));gap:6px;margin-top:12px}
-.v-attr{display:flex;justify-content:space-between;gap:8px;border:2px solid #1f5a24;padding:4px 8px}
+.v-attrs{display:grid;grid-template-columns:repeat(auto-fill,minmax(min(150px,100%),1fr));gap:6px;margin-top:12px}
+.v-attr{display:grid;grid-template-columns:minmax(0,1fr);gap:4px;min-width:0;overflow-wrap:anywhere;border:2px solid #1f5a24;padding:4px 8px}
 .deck{display:grid;grid-template-columns:auto minmax(0,1fr);gap:18px;width:100%;max-width:640px;align-items:start}
 .cover{width:160px;height:160px;border:2px solid #1f5a24;background:repeating-linear-gradient(45deg,#0c1f0f 0 6px,#071209 6px 12px);display:flex;align-items:flex-end;padding:6px;color:#3fc24c}
 @container (max-width:480px){.deck{grid-template-columns:minmax(0,1fr)}.cover{width:128px;height:128px}}
