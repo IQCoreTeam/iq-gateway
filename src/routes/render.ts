@@ -201,6 +201,7 @@ renderRouter.get("/:sig", async (c) => {
   const renderKey = `${RENDER_REVISION}-${format}:${sig}`;
   const cacheKey = `render:${renderKey}`;
 
+  let cacheable = true;
   // Check caches
   let buf = imageCache.get(cacheKey);
   if (!buf) {
@@ -217,14 +218,18 @@ renderRouter.get("/:sig", async (c) => {
       // NFT metadata may point to an IQ image inscription. Resolve only its
       // signature through the existing cache; never fetch arbitrary image URLs.
       if (!detectImageType(decoded)) {
+        let imageSig: unknown;
         try {
           const meta = JSON.parse(decoded.toString("utf-8"));
-          const imageSig = Array.isArray(meta?.attributes)
-            ? meta.attributes.find((a: any) => a?.trait_type === "inscription")?.value : null;
-          if (typeof imageSig === "string" && /^[1-9A-HJ-NP-Za-km-z]{80,90}$/.test(imageSig)) {
-            decoded = await readInscribedImage(imageSig);
+          if (Array.isArray(meta?.attributes)) {
+            imageSig = (meta.attributes as { trait_type?: string; value?: unknown }[])
+              .find(a => a?.trait_type === "inscription")?.value;
           }
         } catch { /* ordinary text/JSON keeps its existing preview */ }
+        if (typeof imageSig === "string" && /^[1-9A-HJ-NP-Za-km-z]{80,90}$/.test(imageSig)) {
+          try { decoded = await readInscribedImage(imageSig); }
+          catch { cacheable = false; }
+        }
       }
       if (detectImageType(decoded)) {
         buf = await sharp(decoded, { limitInputPixels: 16_000_000 })
@@ -245,8 +250,10 @@ renderRouter.get("/:sig", async (c) => {
         buf = Buffer.from(generateSvg(decoded.toString("utf-8"), sig), "utf-8");
       }
 
-      imageCache.set(cacheKey, buf, TTL.IMAGE);
-      await setDiskCache("render", renderKey, buf);
+      if (cacheable) {
+        imageCache.set(cacheKey, buf, TTL.IMAGE);
+        await setDiskCache("render", renderKey, buf);
+      }
     } catch (e: unknown) {
       const msg = e instanceof Error ? e.message : "unknown error";
       if (msg === "image inscription not found") return c.text("not found", 404);
@@ -257,11 +264,11 @@ renderRouter.get("/:sig", async (c) => {
 
   const contentType = detectImageType(buf) || (isPng ? "image/png" : "image/svg+xml");
   const etag = generateETag(buf);
-  if (c.req.header("If-None-Match") === etag) return c.body(null, 304);
+  if (cacheable && c.req.header("If-None-Match") === etag) return c.body(null, 304);
 
   return c.body(new Uint8Array(buf), 200, {
     "Content-Type": contentType,
-    "Cache-Control": "public, max-age=300, must-revalidate",
+    "Cache-Control": cacheable ? "public, max-age=300, must-revalidate" : "no-store",
     ETag: etag,
   });
 });
